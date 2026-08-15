@@ -1,0 +1,27 @@
+# Core web framework
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.2
+email-validator>=2.1
+
+# Database
+SQLAlchemy>=2.0.30
+alembic>=1.13
+psycopg[binary]>=3.1
+aiosqlite>=0.20
+
+# Authentication & security
+bcrypt>=4.1
+PyJWT>=2.8
+cryptography>=42.0
+python-multipart>=0.0.9
+
+# Biometric / image processing
+numpy>=1.26
+Pillow>=10.3
+opencv-python>=4.9; python_version >= "3.9"
+
+# Testing
+pytest>=8.0
+httpx>=0.27
