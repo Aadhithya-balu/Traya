@@ -62,8 +62,14 @@ def test_demo_enroll_requires_consent(client):
 
 
 def test_demo_enroll_works_with_consent(client):
-    user = make_user(client)
-    grant_biometric_consent(client, user["headers"])
-    r = client.post("/api/demo/enroll", headers=user["headers"], json={"samples": 3})
+    email = "demo-enroll@fixed.test.traya"
+    r = client.post(
+        "/api/auth/register",
+        json={"full_name": "Demo Enroll Fixed", "email": email, "password": "ValidPass#1"},
+    )
+    assert r.status_code == 201
+    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    grant_biometric_consent(client, headers)
+    r = client.post("/api/demo/enroll", headers=headers, json={"samples": 3})
     assert r.status_code == 200
     assert r.json()["status"] == "enrolled"

@@ -1,8 +1,7 @@
-import { Link, NavLink, useNavigate } from "react-router-dom";
-import type { ReactNode } from "react";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
-export function Layout({ children }: { children?: ReactNode }) {
+export function Layout() {
   const { user, isAuthed, logout, hasRole } = useAuth();
   const navigate = useNavigate();
 
@@ -89,7 +88,9 @@ export function Layout({ children }: { children?: ReactNode }) {
         </nav>
       </header>
 
-      <main className="flex-1">{children}</main>
+      <main className="flex-1">
+        <Outlet />
+      </main>
 
       <footer className="border-t border-slate-800 bg-ink-950 py-6 text-center text-xs text-slate-500">
         <p>

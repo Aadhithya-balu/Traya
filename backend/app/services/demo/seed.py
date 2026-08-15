@@ -295,12 +295,14 @@ def seed_biometric(db: Session, user: User, seed: str, engine: BiometricEngine) 
         return
 
     profile = existing or BiometricProfile(user_id=user.id)
+    if existing is None:
+        db.add(profile)
+    else:
+        db.query(BiometricEmbedding).filter(BiometricEmbedding.profile_id == profile.id).delete()
     profile.status = "enrolled"
     profile.algo_version = settings.BIOMETRIC_ALGO_VERSION
     profile.num_samples = len(vectors)
     profile.enrolled_at = datetime.now(UTC)
-    if existing is None:
-        db.add(profile)
     db.flush()
 
     for vec in vectors:
@@ -315,11 +317,21 @@ def seed_biometric(db: Session, user: User, seed: str, engine: BiometricEngine) 
     logger.info("Enrolled biometrics for %s (%d samples)", user.email, len(vectors))
 
 
-def seed_all() -> None:
+def seed_all(skip_if_seeded: bool = False) -> None:
+    """Seed roles, demo users, hospitals and settings.
+
+    Idempotent. ``skip_if_seeded=True`` is used at app startup: it returns
+    immediately when demo data already exists, keeping cold boots fast.
+    """
     init_db()
     engine = get_engine()
     db: Session = SessionLocal()
     try:
+        if (
+            skip_if_seeded
+            and db.query(User).filter(User.email == "aarav.kumar@demo.traya").first() is not None
+        ):
+            return
         roles = seed_roles(db)
         seed_settings(db)
         seed_hospitals(db)

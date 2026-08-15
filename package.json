@@ -1,0 +1,8 @@
+{
+  "name": "traya",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:all": "node scripts/dev-all.mjs"
+  }
+}

@@ -19,7 +19,13 @@ export function EmergencyProvider({ children }: { children: ReactNode }) {
   );
   const [result, setResultState] = useState<IdentifyResult | null>(() => {
     const raw = sessionStorage.getItem("traya_emergency_result");
-    return raw ? (JSON.parse(raw) as IdentifyResult) : null;
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as IdentifyResult;
+    } catch {
+      sessionStorage.removeItem("traya_emergency_result");
+      return null;
+    }
   });
   const [previewImage, setPreview] = useState<string | null>(() =>
     sessionStorage.getItem("traya_emergency_preview"),

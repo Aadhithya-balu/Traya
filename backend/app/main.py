@@ -1,9 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api import api_router
 from app.config.settings import settings
@@ -16,6 +18,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("traya")
 
+FRONTEND_DIST = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,7 +29,7 @@ async def lifespan(app: FastAPI):
         from app.services.demo.seed import seed_all
 
         try:
-            seed_all()
+            seed_all(skip_if_seeded=True)
             logger.info("Demo data ensured.")
         except Exception as exc:  # pragma: no cover
             logger.error("Seeding failed: %s", exc)
@@ -51,6 +55,9 @@ app.add_middleware(
 
 app.include_router(api_router, prefix=settings.API_PREFIX)
 
+if (FRONTEND_DIST / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
@@ -61,3 +68,23 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 @app.get("/api/health", tags=["system"])
 def health():
     return {"status": "ok", "app": settings.APP_NAME, "mode": "demo" if settings.DEMO_MODE else "production"}
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def spa(full_path: str):
+    index = FRONTEND_DIST / "index.html"
+    if not index.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="Frontend not built. Run `npm run build` in frontend/ or open http://localhost:5173",
+        )
+    if full_path.startswith(settings.API_PREFIX.strip("/")):
+        raise HTTPException(status_code=404, detail="Not found")
+    candidate = (FRONTEND_DIST / full_path).resolve()
+    try:
+        candidate.relative_to(FRONTEND_DIST.resolve())
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Not found")
+    if full_path and candidate.is_file():
+        return FileResponse(candidate)
+    return FileResponse(index)

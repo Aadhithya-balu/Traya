@@ -198,7 +198,7 @@ def demo_enroll(
         )
 
     engine = get_engine()
-    images = render_enrollment(f"{user.id}-demo-enroll", samples=body.samples)
+    images = render_enrollment(f"{user.email}-demo-enroll", samples=body.samples)
     vectors = []
     usable = 0
     for image in images:
