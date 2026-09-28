@@ -23,16 +23,23 @@ from app.schemas import (
     SettingOut,
     UserAdminOut,
 )
-from app.security.auth import get_current_user, require_roles
+from app.security.auth import get_current_user, require_permission
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
-ADMIN = require_roles("admin")
+# Each admin surface is gated on the capability it exercises rather than on
+# the admin role, so the auditor role can be granted audit read access
+# without also receiving the ability to mutate accounts.
+MANAGE_USERS = require_permission("manage_users")
+MANAGE_ROLES = require_permission("manage_roles")
+MANAGE_SETTINGS = require_permission("manage_settings")
+VIEW_ANALYTICS = require_permission("view_analytics")
+VIEW_AUDIT = require_permission("view_audit_logs")
 
 
 # ------------------------------------------------------------------ analytics
 @router.get("/analytics", response_model=AnalyticsOut)
-def analytics(db: Session = Depends(get_db), _: User = Depends(ADMIN)):
+def analytics(db: Session = Depends(get_db), _: User = Depends(VIEW_ANALYTICS)):
     total_users = db.query(User).count()
     total_enrolled = (
         db.query(BiometricProfile).filter(BiometricProfile.status == "enrolled").count()
@@ -123,7 +130,7 @@ def audit_logs(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles("admin", "auditor")),
+    _: User = Depends(VIEW_AUDIT),
 ):
     query = db.query(AuditLog)
     if action:
@@ -142,7 +149,7 @@ def list_users(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    _: User = Depends(ADMIN),
+    _: User = Depends(MANAGE_USERS),
 ):
     rows = db.query(User).order_by(User.created_at.desc()).offset(offset).limit(limit).all()
     return [
@@ -165,7 +172,7 @@ def set_roles(
     body: RoleAssignmentIn,
     request: Request,
     db: Session = Depends(get_db),
-    admin: User = Depends(ADMIN),
+    admin: User = Depends(MANAGE_ROLES),
 ):
     from app.models import Role
     from app.services.audit_service import log_user_action
@@ -205,7 +212,7 @@ def set_active(
     user_id: str,
     request: Request,
     db: Session = Depends(get_db),
-    admin: User = Depends(ADMIN),
+    admin: User = Depends(MANAGE_USERS),
     active: bool = Query(default=True),
 ):
     from app.services.audit_service import log_user_action
@@ -241,7 +248,7 @@ def set_active(
 def list_sessions(
     limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
-    _: User = Depends(ADMIN),
+    _: User = Depends(VIEW_ANALYTICS),
 ):
     rows = db.query(EmergencySession).order_by(EmergencySession.created_at.desc()).limit(limit).all()
     return [
@@ -261,7 +268,7 @@ def list_sessions(
 
 # ------------------------------------------------------------------ settings
 @router.get("/settings", response_model=list[SettingOut])
-def get_settings(db: Session = Depends(get_db), _: User = Depends(ADMIN)):
+def get_settings(db: Session = Depends(get_db), _: User = Depends(MANAGE_SETTINGS)):
     return db.query(SystemSetting).order_by(SystemSetting.key).all()
 
 
@@ -271,7 +278,7 @@ def update_setting(
     body: SettingIn,
     request: Request,
     db: Session = Depends(get_db),
-    admin: User = Depends(ADMIN),
+    admin: User = Depends(MANAGE_SETTINGS),
 ):
     from app.services.audit_service import log_user_action
 
@@ -299,7 +306,7 @@ def update_setting(
 def list_hospitals(
     request: Request,
     db: Session = Depends(get_db),
-    admin: User = Depends(ADMIN),
+    admin: User = Depends(MANAGE_USERS),
 ):
     return db.query(Hospital).order_by(Hospital.name).all()
 
@@ -309,7 +316,7 @@ def add_hospital(
     body: HospitalAdminIn,
     request: Request,
     db: Session = Depends(get_db),
-    admin: User = Depends(ADMIN),
+    admin: User = Depends(MANAGE_USERS),
 ):
     from app.services.audit_service import log_user_action
 
@@ -334,7 +341,7 @@ def update_hospital(
     body: HospitalAdminIn,
     request: Request,
     db: Session = Depends(get_db),
-    admin: User = Depends(ADMIN),
+    admin: User = Depends(MANAGE_USERS),
 ):
     from app.services.audit_service import log_user_action
 
@@ -354,7 +361,7 @@ def delete_hospital(
     hospital_id: str,
     request: Request,
     db: Session = Depends(get_db),
-    admin: User = Depends(ADMIN),
+    admin: User = Depends(MANAGE_USERS),
 ):
     from app.services.audit_service import log_user_action
 

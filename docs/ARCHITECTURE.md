@@ -1,227 +1,281 @@
-# TRAYA Architecture
+[README.md](README.md) | [Backend](backend/README.md) | [Frontend](frontend/README.md) |
+[Operations](operations/README.md) | [Decisions](decisions/README.md)
+
+# Architecture
+
+How the pieces fit together. This page is the **narrative** layer: flow, and
+the reasoning behind the flow. Every component, endpoint, table, function and
+token is documented by name in the reference pages, which this page links to
+rather than restates.
+
+> **The biometric engine in this repository is a simulation.** It measures
+> brightness similarity between images. It cannot identify a person, and
+> measured impostor similarity reaches 0.817 - above the 0.62 review threshold.
+> Nothing here is a production biometric. Read
+> [ADR 0001](decisions/0001-simulation-biometric-engine.md) before trusting
+> anything in this document about recognition quality.
 
 ## System overview
 
-TRAYA is a two-part system:
+Two processes and one database.
 
-1. **FastAPI backend** (`backend/app`) — REST API, authentication & RBAC, the
-   identification pipeline, emergency session management, medical/hospital
-   lookups, admin & audit services, demo/seed tooling.
-2. **React SPA** (`frontend`) — citizen dashboard, emergency capture wizard,
-   responder hub, admin console and a demo playground, talking to the API
-   through a typed client (`src/api/client.ts`) with automatic token refresh.
+```
+browser ──> React SPA  (:5173 in dev, / in production)
+              │  relative /api, Authorization: Bearer, 401 auto-refresh
+              ▼
+           FastAPI  (:8000)
+              │  routers -> security -> services -> repositories -> SQLAlchemy
+              ▼
+      Supabase / PostgreSQL   (production)
+      SQLite                  (development and demo fallback)
+```
 
-The backend is layered so each concern is isolated:
+1. **FastAPI backend** (`backend/app`) - REST API, authentication and RBAC,
+   the identification pipeline, emergency session management, medical and
+   hospital lookups, admin and audit, demo and seed tooling.
+2. **React SPA** (`frontend`) - citizen dashboard, emergency capture, responder
+   hub, admin console and a demo playground, talking to the API through one
+   typed client with automatic token refresh.
+
+`main.py` serves `/api/*` as JSON **and** the built SPA from `frontend/dist` at
+`/` and any non-API path, so production is a single origin. That is what lets
+the JWT live in `localStorage` without a cross-origin problem.
+
+## Backend layers
 
 ```
 app/
-  api/          HTTP routers (auth, users, biometric, emergency, demo, admin, hospitals)
-  config/       pydantic-settings based configuration (env / .env)
-  database/     engine, session factory, Base
-  models/       SQLAlchemy ORM entities
-  schemas/      pydantic request/response models
-  security/     auth (JWT + RBAC), password hashing, Fernet crypto, rate limiting, tokens
-  services/
-    identification/  engine (detection+quality+embedding), pipeline, confidence, registry
-    demo/            synthetic face renderer + seeder
-    medical/         medical profile aggregation for responders
-    location/        nearby-hospital resolution
-    notification/    notification creation
-    audit_service/   write-audit helpers
-  utils/        shared helpers (image validation, session codes)
+  api/            HTTP routers. Auth checks, no business logic.
+  security/       JWT, RBAC, password hashing, Fernet, rate limiting
+  services/       Domain logic. The only place that knows what anything means.
+  repositories/   Data access. The only layer that writes SQL.
+  models/         SQLAlchemy ORM entities
+  schemas/        Pydantic request/response models
+  config/         pydantic-settings
+  database/       engine, session factory, probe and fallback
+  utils/          image validation, session codes
 ```
 
-## Data model
+The rule that makes the codebase navigable: **dependencies point one way.**
+Routers call services, services call repositories, repositories touch the
+session. A service never imports a router, and a repository never makes a
+policy decision.
 
-| Table | Purpose |
-| --- | --- |
-| `users` | Citizens + platform accounts (email, phone, DOB, active flag, roles via `user_roles`) |
-| `roles`, `user_roles` | Role-based access control (registered_user, medical_responder, admin, auditor) |
-| `biometric_profiles` | One active enrollment per user (status, sample count, algorithm version) |
-| `biometric_embeddings` | Encrypted embedding vectors linked to a profile |
-| `medical_profiles` | Blood group, allergies, conditions, medications, emergency notes, preferred hospital, home coordinates |
-| `emergency_contacts` | Named contacts with `relation`, priority; max 10 per user |
-| `visible_features` | Secondary identifying features (birthmarks, scars, tattoos) |
-| `consents` | Explicit consent records with status + version history |
-| `emergency_sessions` | Per-incident sessions (code, status, outcome, confidence category, timestamps) |
-| `identification_attempts` | Quality/result record for each identification attempt |
-| `identification_candidates` | Ranked candidate identities per attempt + confirmation state |
-| `locations` | Incident location history |
-| `hospitals` | Directory used by the responder hub (admin CRUD) |
-| `system_settings` | Runtime-tunable confidence thresholds |
-| `notifications` | User-facing notifications |
-| `audit_logs` | Immutable action trail (actor, action, resource, session, IP) |
+- [API reference](backend/api.md) - all 47 endpoints across 7 routers.
+- [Security](backend/security.md) - roles, permissions, tokens, crypto.
+- [Services](backend/services.md) - every service module and its surface.
+- [Repositories](backend/repositories.md) - every repository class and method.
+- [Data model](backend/data-model.md) - every table, relationship and migration.
+- [Configuration](backend/configuration.md) - every settings field.
 
-Relationships are set up on the ORM; `app.models.__init__.all_models` is the
-single import that registers every table on `Base.metadata` (used by both
-`init_db()` and Alembic autogenerate).
+## Request paths worth understanding
 
-## Biometric engine
-
-The engine (`app/services/identification/engine.py`) has two modes:
-
-- **`opencv`** — attempts real Haar-cascade face detection when OpenCV is
-  available and functional.
-- **`simulation`** — the default in this environment (opencv-python 5.x ships
-  without the cascade data). Detection is replaced by a skin-tone HSV mask
-  over connected components; faces are blobs that are face-sized, not touching
-  the frame borders and not huge.
-
-### Quality model
-
-A capture is `usable_for_matching` only when **all** gates pass:
+### A bystander identifying an unresponsive person
 
 ```
-image_quality_score >= 0.50
-  = 0.40 * blur_score + 0.35 * lighting_score + 0.25 * contrast_score
-face_visibility_score >= 0.45
-  = 0.55 * min(1, density*1.15) + 0.45 * size_score     (density = skin/box)
-occlusion_score  <= 0.75
-  = 1 - density*0.85
-exactly one face in frame
+POST /api/emergency/start          -> session_id + access_token (plaintext, once)
+POST /api/emergency/{id}/capture   X-TRAYA-Session-Token   -> quality verdict
+POST /api/emergency/{id}/identify  X-TRAYA-Session-Token   -> IdentifyResult
 ```
 
-Rejection reasons are surfaced verbatim (blurry, dark/bright, multiple faces,
-obstructed, face too small).
+The session id is **not** a credential. It is an identifier, and a session
+token is minted with the session and returned exactly once; only its SHA-256
+hash is stored. Every subsequent call needs `X-TRAYA-Session-Token`, so a
+session id that leaks - in a URL, a log, a screenshot - is not enough to read
+anybody's data. See
+[ADR 0002](decisions/0002-session-token-authorization.md).
 
-### Embedding & similarity
+Guards short-circuit before matching: `NO_FACE`, `MULTIPLE_FACES` and
+`POOR_QUALITY` persist an attempt and return without scoring anything.
 
-The simulation embedding is a deterministic, **interpretable demo vector**, not
-a production biometric:
+### A responder escalating
 
-- A face crop is median-filtered and resized to a `16x16` luminance grid.
-- 12 explicit features are extracted: skin tone, skin variance, hair darkness,
-  left/center/right eye darkness, brow, mouth, beard, symmetry, face aspect and
-  overall luminance.
-- Each feature is scaled by an approximate unit-variance weight and the vector
-  is zero-padded to `EMBEDDING_DIM=320`.
+```
+POST /api/emergency/{id}/confirm                 (medical_responder)
+GET  /api/emergency/{id}/medical-summary         completed session only
+GET  /api/emergency/{id}/responder-profile       role-gated
+POST /api/emergency/{id}/contact                  consent-gated, audited
+```
 
-Similarity uses L2 distance:
+`REVIEW_REQUIRED` is not a failure state. It is the design: a weak signal goes
+to a human, and only human confirmation unlocks the medical profile.
+
+### An administrator auditing
+
+Every sensitive action writes an `audit_logs` row - login, profile and medical
+changes, consent grants and withdrawals, enrolment, admin actions, account
+deletion, and denied session access. Auditors read; they do not write. See
+[ADR 0006](decisions/0006-audit-on-every-sensitive-action.md).
+
+## The identification pipeline
+
+`app/services/identification/pipeline.py`, six steps.
+
+1. **Decode and detect.** `decode_image` validates magic bytes, then
+   `detect_faces` returns boxes and a mode.
+2. **Quality gate.** `analyze_quality` measures blur, lighting, contrast, face
+   visibility and occlusion, and emits both human `reasons` and stable
+   `reason_codes`. A capture is usable only when:
+
+   ```
+   image_quality_score   >= 0.50   = 0.40*blur + 0.35*lighting + 0.25*contrast
+   face_visibility_score >= 0.45   = 0.55*min(1, density*1.15) + 0.45*size
+   occlusion_score       <= 0.75   = 1 - density*0.85
+   exactly one face in frame
+   ```
+
+3. **Tier 1, face.** Embed the face and score every enrolled profile. Profiles
+   below the fallback threshold (0.60) are dropped.
+4. **Tier 2, secondary features.** Optional text terms boost a profile that
+   shares a visible feature, `+0.06 * match_ratio`.
+5. **Tier 3, context.** Incident coordinates near a profile's home coordinates
+   add a supporting `+0.05`.
+6. **Decision.**
+
+   ```
+   best >= 0.82            -> HIGH_CONFIDENCE    (auto-accepted)
+   best >= 0.62            -> REVIEW_REQUIRED    (a human decides)
+   best <  0.62, matched   -> LOW_CONFIDENCE
+   nothing >= 0.60         -> NO_MATCH
+   ```
+
+Tiers 2 and 3 are **supporting evidence, never identity proof.** A boost cannot
+promote a candidate into `HIGH_CONFIDENCE` on its own, and a weak face score
+plus fallback signals stays in `REVIEW_REQUIRED` with `fallback_used=True` so a
+person decides rather than the system forcing an identity.
+
+Thresholds and boosts are read from `system_settings` at runtime via
+`thresholds_from_settings` and are editable in the admin console. **The seeded
+database rows override the environment variables**, so changing
+`HIGH_CONFIDENCE_THRESHOLD` in `.env` on a seeded database does nothing.
+
+### What the simulation embedding actually is
+
+Twelve explicit darkness features - skin tone, skin variance, hair darkness,
+eye darkness left/centre/right, brow, mouth, beard, symmetry, face aspect,
+overall luminance - scaled per feature and zero-padded to
+`EMBEDDING_DIM = 320`. Similarity is L2 distance:
 
 ```
 similarity = clamp(1 - ||a - b|| / 3.0, 0, 1)
 ```
 
-Because the features are luminance/darkness-based, the vector is **stable for
-the same identity** (mild noise/lighting changes barely move it) and **distinct
-across identities**, while deliberate degradations (occlusion band, heavy noise)
-shift it controllably. Verified discrimination: same-identity >= 0.90, clean
-aarav vs unknown max ~0.37.
+Measured over the synthetic corpus: clean same-identity 0.986-0.995, degraded
+same-identity 0.711-0.866, impostor 0.000-**0.817** with a mean of 0.309. **6 of
+30 impostor pairs exceed the 0.62 review threshold, and two demo identities
+collide at 0.817.** The impostor range overlaps the degraded same-identity
+range. That is the whole reason this cannot identify anyone.
 
-## Identification pipeline
+## Guided biometric enrolment
 
-`app/services/identification/pipeline.py` implements the multi-tier flow:
+Two paths exist and they are not equivalent.
 
-1. **Decode + detect** — face boxes + quality report.
-2. **Guards** — `MULTIPLE_FACES`, `NO_FACE`, `POOR_QUALITY` short-circuit with
-   a persisted attempt and no matching.
-3. **Tier 1 (face)** — embed the face and score every enrolled profile
-   (`load_enrolled`); profiles below the face-fallback threshold (0.60) are
-   dropped.
-4. **Tier 2 (secondary features)** — optional text terms boost a profile when
-   they match the user's `visible_features` (`+0.06 * match_ratio`).
-5. **Tier 3 (context)** — incident coordinates near a profile's home add a
-   supporting `+0.05` boost. Supporting evidence only — never identity proof.
-6. **Decision** — top candidate decides status:
+| | Bulk | Guided |
+|---|---|---|
+| Endpoints | `POST /users/biometric/enroll` | `/users/biometric/enrollment/*` |
+| Samples | 2-4, any order | 5 ordered poses |
+| Intermediate state | none | rows in `biometric_samples` |
+| Expiry | n/a | 20 minutes (`ENROLLMENT_TTL_MINUTES`) |
+| Guidance | none | per-step coaching from `GUIDANCE_BY_REASON` |
+| Transaction | single | staged, then one atomic replace |
+| UI | `Profile` uses this | **not wired to any page yet** |
 
-```
-best >= 0.82           -> HIGH_CONFIDENCE   (auto-accepted)
-best >= 0.62           -> REVIEW_REQUIRED   (needs human confirmation)
-best <  0.62, matched  -> LOW_CONFIDENCE
-no profile >= 0.60     -> NO_MATCH
-```
+`replace_embeddings` **deletes before it inserts**, so a revoked-and-re-enrolled
+person can never be matched against an old template. Steps are defined by
+`POSE_STEPS`; a sample is evaluated by `SampleVerdict`, which returns an
+`as_dict` the coach reads.
 
-Thresholds and boosts come from `system_settings` at runtime
-(`thresholds_from_settings`) and are editable in the admin console.
-
-Trauma-aware behaviour: a weak face score combined with fallback signals keeps
-the status in `REVIEW_REQUIRED` (`fallback_used=True`) so a human decides
-rather than the system forcing an identity.
-
-### Level 4 — human confirmation
-
-A `medical_responder` can confirm or reject a candidate
-(`POST /api/emergency/{id}/confirm`). Accepting sets the session to
-`completed` with `confidence_category=HUMAN_CONFIRMED` and unlocks the medical
-profile, responder view and contact actions.
-
-## Emergency session lifecycle
-
-1. `POST /api/emergency/start` creates an `EmergencySession` (code + expiry).
-2. `POST /api/emergency/{id}/capture` validates & stores the image, returns the
-   quality verdict.
-3. `POST /api/emergency/{id}/identify` runs the pipeline and persists attempt +
-   candidates.
-4. A high-confidence result completes the session immediately; otherwise a
-   responder confirms.
-5. `GET /api/emergency/{id}/medical-summary`, `/responder-profile` and
-   `/contact` are gated behind a completed identification + role checks.
-
-Sessions expire per `EMERGENCY_SESSION_MINUTES`; retention is configured via
-`SESSION_RETENTION_DAYS`.
+Constants `ENROLLMENT_TTL_MINUTES = 20`, `MIN_ACCEPTED_SAMPLES = 3` and the
+accepted-samples minimum live in the service, **not in settings**, so they are
+not configurable without a code change. That is a deliberate simplification and
+a documented limitation.
 
 ## Security design
 
-- **Passwords** — bcrypt (`app/security/password.py`).
-- **Tokens** — signed JWTs (`app/security/tokens.py`): short-lived access +
-  refresh token pair, with token-type claims.
-- **RBAC** — dependency-driven role checks per router; admin/auditor/responder
-  endpoints enforce their own authorization (403 for authenticated users
-  without the role, 401 for anonymous).
-- **Biometric data** — embeddings are encrypted at rest with Fernet
-  (`app/security/crypto.py`); the key is derived from `ENCRYPTION_KEY` or the
-  app `SECRET_KEY`.
-- **Audit trail** — every sensitive action writes an `audit_logs` row (login,
-  profile/medical changes, consents, biometric enroll/delete, admin actions,
-  account deletion). Auditors have read-only access.
-- **Rate limiting** — in-memory sliding-window limiter for login and public
-  identification (`app/security/rate_limit.py`).
-- **Account lifecycle** — self-service deletion soft-deletes (anonymises email,
-  deactivates) and disables logins.
-- **Uploads** — base64 images validated for magic bytes, size and MIME before
-  any processing.
+| Concern | Where | Notes |
+|---|---|---|
+| Passwords | `security/password.py` | bcrypt. |
+| JWTs | `security/tokens.py` | Access plus refresh, with a type claim. |
+| Session token | `utils/helpers.py` | `secrets.token_urlsafe`; only the hash is stored. |
+| RBAC | `security/permissions.py` | 18 permissions, 7 roles, dependency-driven. |
+| Embeddings at rest | `security/crypto.py` | Fernet. See [ADR 0005](decisions/0005-biometric-encryption-at-rest.md). |
+| Audit | `services/audit_service` | Append-only, `hash_ip` never raw. |
+| Rate limiting | `security/rate_limit.py` | In-memory sliding window. |
+| Uploads | `utils/image` | Magic bytes, size and MIME before any processing. |
+
+**Authorization is enforced in Python, in one layer.** There is no row-level
+security at the database; see [SQL assets](operations/README.md#sql-assets).
+Every read already goes through a repository scoped by owner or session, so RLS
+could be added without restructuring - but it is not there today.
+
+`ENCRYPTION_KEY` empty means it is **derived from `SECRET_KEY`**. Rotating the
+secret without setting the encryption key first makes every stored biometric
+blob permanently undecryptable. That is the single most likely way to lose the
+entire biometric database.
+
+## Database
+
+Supabase/PostgreSQL is the production target; SQLite is the development and demo
+fallback. `app/database/service.py` probes the primary with a 3-second timeout
+and, when `DATABASE_ALLOW_FALLBACK` is on and the probe fails, switches to the
+fallback URL. See [ADR 0003](decisions/0003-supabase-primary-sqlite-fallback.md).
+
+A silent fallback is a feature in development and a hazard in production: a
+PostgreSQL outage would quietly start writing emergency data to a local file.
+Consider `DATABASE_ALLOW_FALLBACK=false` in production.
+
+Four migrations exist; `alembic check` is the one that catches model drift, and
+`upgrade head` only proves the existing migrations run.
+
+## Frontend
+
+React 18, TypeScript, Vite, Tailwind, React Router. No UI library, no state
+library, no i18n library, no data-fetching library - all four are hand-rolled
+and documented.
+
+One API client owns base URL, auth header, single-flight 401 refresh and error
+shape. `AuthContext` owns the current user; `EmergencyContext` holds the in-flight
+session in `sessionStorage` so a refresh does not lose the photo.
+
+The capture screen is the product: camera-first, gallery as an equal path rather
+than a hidden fallback, quality feedback before matching, and a session that
+opens lazily so an abandoned attempt leaves no incident behind.
+
+- [Routing and guards](frontend/routing.md), [pages](frontend/pages.md),
+  [components](frontend/components.md),
+  [state and data](frontend/state-and-data.md),
+  [design system](frontend/design-system.md).
 
 ## Demo mode
 
-`DEMO_MODE=true` (default) enables:
+`DEMO_MODE=true` (default) enables an idempotent seed, the `/api/demo/*`
+endpoints and a deterministic synthetic face renderer with controllable noise,
+blur, darkness, occlusion bands, multiple faces and no faces at all. Synthetic
+images flow through the **real** pipeline, which is the point.
 
-- **Seeding** (`app/services/demo/seed.py`, idempotent): 8 users, 4 with
-  enrolled biometrics, 9 hospitals; run with
-  `python -m app.services.demo.seed`.
-- **`/api/demo/*`** — scenario runner (`high_confidence`, `low_confidence`,
-  `no_match`, `multiple_faces`, `poor_quality`, `gps_unavailable`),
-  direct-enroll helper and session trigger.
-- **Synthetic renderer** (`app/services/demo/demo_images.py`) — deterministic
-  faces derived from a seed string, with controllable noise, blur, darkness,
-  occlusion bands, multiple faces or none.
-
-All demo accounts use password `TrayaDemo#2026`.
+Every byte is fictional and must stay that way. Synthetic identity seeds must be
+deterministic: the face feature space is small enough that arbitrary identity
+strings collide. See
+[Demo accounts](operations/README.md#demo-accounts).
 
 ## Testing
 
-87 pytest cases in `backend/tests` run against a throwaway SQLite DB in the
-system temp dir (isolated by setting `DATABASE_URL` before any app import).
-See `backend/pytest.ini` and `tests/conftest.py` for the harness and helpers.
+130 pytest cases against a throwaway SQLite database in the system temp dir,
+isolated by setting `DATABASE_URL` before any `app` import. **No frontend test
+runner exists** - frontend changes are verified by `tsc` and by reading the
+diff. See [testing](operations/README.md#testing).
 
-## Migrations
+## Deployment
 
-Alembic is wired so `DATABASE_URL` is read from application settings
-(`migrations/env.py`). Generate a migration with:
+The frontend is a static build served from the same origin as the API. Before
+production: replace `SECRET_KEY`, set `ENCRYPTION_KEY` explicitly, set
+`DEBUG=false` and `DEMO_MODE=false`, point `DATABASE_URL` at Supabase, set
+`CORS_ORIGINS`, terminate TLS, and keep the simulation disclosure visible - or
+replace the engine behind the same interface with a real recogniser.
 
-```bash
-python -m alembic revision --autogenerate -m "message"
-python -m alembic upgrade head
-```
+The full checklist, with the reasoning, is in
+[production checklist](operations/README.md#production-checklist).
 
-`init_db()` (create-all) remains for throwaway/dev databases; migrations are
-the production path.
-
-## Deployment notes
-
-- Set `DATABASE_URL` to a PostgreSQL DSN, `SECRET_KEY`/`ENCRYPTION_KEY` to
-  strong random values, and `DEMO_MODE=false` in production.
-- `BIOMETRIC_ENGINE=opencv` with a compatible OpenCV build enables real face
-  detection; the simulation embedding must be replaced by a production model
-  for real-world use.
-- The frontend is a static Vite build served behind the same origin as the API
-  (the dev server proxies `/api` to port 8000).
+`BIOMETRIC_ENGINE=opencv` does **not** give you real face detection here: OpenCV
+5.x ships no cascade data in this environment, so `detect_faces` falls back to
+the simulator while appearing to take the real path.

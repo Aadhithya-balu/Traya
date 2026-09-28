@@ -83,9 +83,22 @@ def start_session(client: TestClient) -> dict:
     return r.json()
 
 
-def identify(client: TestClient, session_id: str, image: str, **extra) -> dict:
+def session_headers(session: dict) -> dict:
+    """Auth headers for a bystander emergency session.
+
+    Emergency sessions are authorized by their own access token, not by a
+    login, so every session-scoped call must carry it.
+    """
+    return {"X-TRAYA-Session-Token": session["session_token"]}
+
+
+def identify(client: TestClient, session: dict, image: str, **extra) -> dict:
     body = {"image": image, **extra}
-    r = client.post(f"/api/emergency/{session_id}/identify", json=body)
+    r = client.post(
+        f"/api/emergency/{session['session_id']}/identify",
+        headers=session_headers(session),
+        json=body,
+    )
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -117,6 +130,16 @@ def admin_headers(client: TestClient) -> dict:
 @pytest.fixture(scope="session")
 def auditor_headers(client: TestClient) -> dict:
     return auth_headers(client, "auditor@traya.io")
+
+
+@pytest.fixture(scope="session")
+def police_headers(client: TestClient) -> dict:
+    return auth_headers(client, "suresh.patil@responder.traya")
+
+
+@pytest.fixture(scope="session")
+def hospital_headers(client: TestClient) -> dict:
+    return auth_headers(client, "karthik.raman@responder.traya")
 
 
 # --------------------------------------------------------------------------

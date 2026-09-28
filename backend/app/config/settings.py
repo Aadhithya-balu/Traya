@@ -21,9 +21,15 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "CHANGE_ME_traya_dev_secret_key_do_not_use_in_production"
     ENCRYPTION_KEY: str = ""  # Fernet key; auto-derived from SECRET_KEY if empty
 
-    # Database. PostgreSQL by default; SQLite used automatically when
-    # DATABASE_URL points to sqlite or is left as the local default.
+    # Database. Supabase/PostgreSQL is the production primary; SQLite is the
+    # demo and development fallback (see app/database/service.py).
     DATABASE_URL: str = "sqlite:///./traya.db"
+    DATABASE_FALLBACK_URL: str = ""
+    DATABASE_ALLOW_FALLBACK: bool = True
+    DATABASE_PROBE_TIMEOUT_SECONDS: float = 3.0
+    SUPABASE_URL: str = ""
+    SUPABASE_ANON_KEY: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
 
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -72,6 +78,33 @@ class Settings(BaseSettings):
     @property
     def is_sqlite(self) -> bool:
         return self.DATABASE_URL.startswith("sqlite")
+
+    @property
+    def is_postgres(self) -> bool:
+        return self.DATABASE_URL.startswith(("postgresql", "postgres+"))
+
+    @property
+    def uses_supabase(self) -> bool:
+        """True when the primary points at a Supabase project.
+
+        Supabase URLs are pooled connection strings carrying the project ref
+        as the host, e.g. ``aws-0-ap-south-1.pooler.supabase.com``.
+        """
+        return self.is_postgres and "supabase" in self.DATABASE_URL
+
+    @property
+    def effective_fallback_url(self) -> str:
+        return self.DATABASE_FALLBACK_URL or "sqlite:///./traya.db"
+
+    def masked_database_url(self) -> str:
+        """Connection string with any password replaced, for status output."""
+        url = self.DATABASE_URL
+        if "@" not in url or "://" not in url:
+            return url
+        scheme, rest = url.split("://", 1)
+        credentials, host = rest.split("@", 1)
+        user = credentials.split(":", 1)[0]
+        return f"{scheme}://{user}:***@{host}"
 
     @property
     def encryption_key(self) -> bytes:

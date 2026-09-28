@@ -75,6 +75,7 @@ class QualityReport:
     lighting_score: float
     usable_for_matching: bool
     reasons: list[str] = field(default_factory=list)
+    reason_codes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -85,6 +86,7 @@ class QualityReport:
             "lighting_score": round(self.lighting_score, 3),
             "usable_for_matching": self.usable_for_matching,
             "reasons": self.reasons,
+            "reason_codes": self.reason_codes,
         }
 
 
@@ -240,6 +242,26 @@ def analyze_quality(image: Image.Image, face_boxes: list[FaceBox]) -> QualityRep
     if face_boxes and face_boxes[0].area / (image.width * image.height) < 0.02:
         reasons.append("Face is too small in the frame")
 
+    # Stable machine-readable codes, kept in step with the sub-scores above.
+    # Consumers (guided enrollment, the emergency quality panel) map these to
+    # localized guidance instead of re-deriving thresholds of their own, so a
+    # capture is never accepted in one place and rejected in another.
+    reason_codes: list[str] = []
+    if not face_boxes:
+        reason_codes.append("no_face")
+    elif len(face_boxes) > 1:
+        reason_codes.append("multiple_faces")
+    if blur_score < 0.35:
+        reason_codes.append("blurry")
+    if lighting_score < 0.45:
+        reason_codes.append("too_dark")
+    if face_boxes and face_boxes[0].area / img_area < 0.02:
+        reason_codes.append("face_too_small")
+    if occlusion > 0.75:
+        reason_codes.append("occluded")
+    if not reason_codes and not usable:
+        reason_codes.append("low_quality")
+
     return QualityReport(
         image_quality_score=round(image_quality_score, 3),
         face_visibility_score=round(face_visibility, 3),
@@ -248,6 +270,7 @@ def analyze_quality(image: Image.Image, face_boxes: list[FaceBox]) -> QualityRep
         lighting_score=round(lighting_score, 3),
         usable_for_matching=usable,
         reasons=reasons,
+        reason_codes=reason_codes,
     )
 
 
@@ -368,6 +391,146 @@ def extract_embedding(image: Image.Image, box: FaceBox | None = None) -> np.ndar
     return features
 
 
+# --------------------------------------------------------------------------
+# Pose estimation
+# --------------------------------------------------------------------------
+@dataclass
+class PoseEstimate:
+    """Coarse head-orientation reading for guided enrollment.
+
+    HONEST LIMITATION: this is not a landmark-based solver. OpenCV's bundled
+    cascades return no 3D points and TRAYA ships no 68-point landmark model,
+    so orientation is read from how lopsided the dark regions of the face crop
+    are: the darkness energy of one half against the other, per axis.
+
+    Both values are therefore *normalised asymmetry* in (-1, 1), not angles.
+    Converting them to degrees would be an invented calibration. Zero means
+    the two halves balance. Measuring asymmetry rather than distance from the
+    crop centre matters: the dark mass of a frontal face does not sit at the
+    centre of its crop, so a centroid-based reading has a systematic bias that
+    a turned face would have to overcome.
+
+    ``TURNED_OFFSET`` sits in the measured gap on the synthetic corpus: a
+    frontal face stays within 0.016 and a clearly turned face exceeds 0.050.
+
+    The vertical axis is only comparable against a baseline from the same
+    person, because hair, beard and lighting all bias it; use
+    ``direction_against`` rather than ``direction`` for up/down.
+
+    ``confident`` is False when the crop is too small, too flat, or so
+    lopsided that the split is not measuring a head. Callers must treat a
+    low-confidence reading as "unknown" and must not use it to reject an
+    otherwise good capture.
+    """
+
+    offset_x: float
+    offset_y: float
+    confident: bool
+    reason: str = ""
+
+    @property
+    def direction(self) -> str:
+        """Coarse bucket: front, left, right, up, down, or unknown.
+
+        Returns ``unknown`` rather than ``front`` when the reading is not
+        trustworthy, so an unmeasurable pose is never mistaken for a frontal
+        one.
+        """
+        if not self.confident:
+            return "unknown"
+        return direction_against(self, baseline=None)
+
+    @property
+    def is_frontal(self) -> bool:
+        return self.confident and self.direction == "front"
+
+
+# Normalised asymmetry above which a head counts as turned. Chosen in the gap
+# between the frontal band (<= 0.016) and the clearly-turned band (>= 0.050)
+# so the threshold does not depend on a particular face or capture seed.
+TURNED_OFFSET = 0.03
+# Beyond this, one side holds nearly all the energy and the split is no longer
+# describing a head.
+MAX_MEASURABLE_ASYMMETRY = 0.6
+
+
+def direction_against(
+    pose: PoseEstimate, baseline: "PoseEstimate | None"
+) -> str:
+    """Bucket a reading into front/left/right/up/down.
+
+    Horizontal needs no baseline. Vertical is judged against ``baseline``,
+    which should be the reading from the same person's front-facing capture.
+    Without one, pitch is ignored rather than guessed.
+    """
+    if not pose.confident:
+        return "front"
+    if abs(pose.offset_x) >= TURNED_OFFSET:
+        return "left" if pose.offset_x > 0 else "right"
+    if baseline is not None and baseline.confident:
+        delta = pose.offset_y - baseline.offset_y
+        if abs(delta) >= TURNED_OFFSET * 1.5:
+            return "down" if delta > 0 else "up"
+    return "front"
+
+
+def _asymmetry(values: np.ndarray) -> float:
+    """Signed energy imbalance of an array split down its first axis."""
+    half = values.shape[0] // 2
+    low = float(values[:half].sum())
+    high = float(values[half:].sum())
+    total = low + high
+    if total < 1e-6:
+        return 0.0
+    return (low - high) / total
+
+
+def estimate_pose(image: Image.Image, box: FaceBox | None = None) -> PoseEstimate:
+    """Read head orientation from a face crop as normalised asymmetry."""
+    crop = image
+    if box is not None:
+        x, y = max(0, box.x), max(0, box.y)
+        w, h = min(image.width - x, box.w), min(image.height - y, box.h)
+        if w > 4 and h > 4:
+            crop = image.crop((x, y, x + w, y + h))
+
+    if crop.width < 24 or crop.height < 24:
+        return PoseEstimate(0.0, 0.0, False, "face_too_small")
+
+    lum = np.asarray(
+        ImageOps.grayscale(crop).resize((24, 24)), dtype=np.float32
+    ) / 255.0
+    if float(lum.std()) < 0.04:
+        # A flat crop carries no structure to measure; lighting, not pose.
+        return PoseEstimate(0.0, 0.0, False, "low_contrast")
+
+    darkness = np.clip(1.0 - lum, 0.0, None)
+    if float(darkness.sum()) < 1e-3:
+        return PoseEstimate(0.0, 0.0, False, "no_structure")
+
+    # columns -> left/right, rows -> top/bottom
+    offset_x = _asymmetry(darkness.sum(axis=0))
+    offset_y = _asymmetry(darkness.sum(axis=1))
+
+    confident = (
+        abs(offset_x) < MAX_MEASURABLE_ASYMMETRY
+        and abs(offset_y) < MAX_MEASURABLE_ASYMMETRY
+    )
+    reason = "" if confident else "one_side_dominated"
+    return PoseEstimate(
+        offset_x=offset_x, offset_y=offset_y, confident=confident, reason=reason
+    )
+    reason = "" if confident else "centroid_at_edge"
+    return PoseEstimate(
+        offset_x=offset_x, offset_y=offset_y, confident=confident, reason=reason
+    )
+
+
+def pose_step_key(pose: PoseEstimate) -> str:
+    """Bucket a reading into the enrollment step it most resembles."""
+    return pose.direction
+
+
 def compare(embedding_a: np.ndarray, embedding_b: np.ndarray) -> float:
     """Similarity in [0, 1] from the L2 distance of feature embeddings.
 
@@ -420,6 +583,10 @@ class BiometricEngine:
     def embed(self, image_bytes: bytes | str, box: FaceBox | None = None) -> np.ndarray:
         image = decode_image(image_bytes)
         return extract_embedding(image, box)
+
+    def pose(self, image_bytes: bytes | str, box: FaceBox | None = None) -> PoseEstimate:
+        image = decode_image(image_bytes)
+        return estimate_pose(image, box)
 
     def similarity(self, a: np.ndarray, b: np.ndarray) -> float:
         return compare_centered(a, b)

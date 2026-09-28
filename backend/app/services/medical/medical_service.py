@@ -10,7 +10,8 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app.models import EmergencyContact, MedicalProfile, User
+from app.models import MedicalProfile, User
+from app.repositories.profile import ProfileRepository
 
 
 @dataclass
@@ -58,17 +59,7 @@ def _age(dob) -> int | None:
 
 def get_public_summary(db: Session, user: User) -> PublicSummary:
     medical: MedicalProfile | None = user.medical_profile
-    primary = (
-        db.query(EmergencyContact)
-        .filter(EmergencyContact.user_id == user.id, EmergencyContact.is_primary.is_(True))
-        .first()
-    )
-    if primary is None:
-        primary = (
-            db.query(EmergencyContact)
-            .filter(EmergencyContact.user_id == user.id)
-            .first()
-        )
+    primary = ProfileRepository(db).primary_contact(user.id)
 
     warnings: list[str] = []
     if medical:

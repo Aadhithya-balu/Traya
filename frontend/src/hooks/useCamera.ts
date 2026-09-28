@@ -4,7 +4,9 @@ export interface CameraState {
   stream: MediaStream | null;
   error: string | null;
   capturing: boolean;
-  videoRef: React.RefObject<HTMLVideoElement>;
+  /** True while the stream is running, so the UI can show a stop affordance. */
+  active: boolean;
+  videoRef: React.RefObject<HTMLVideoElement | null>;
   start: () => Promise<void>;
   stop: () => void;
   capture: () => Promise<string | null>;
@@ -24,8 +26,14 @@ export function useCamera(): CameraState {
       return;
     }
     try {
+      // environment, not user: a responder is photographing the person in
+      // front of them, not themselves.
       const s = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user", width: { ideal: 720 }, height: { ideal: 1280 } },
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1080 },
+          height: { ideal: 1440 },
+        },
         audio: false,
       });
       streamRef.current = s;
@@ -40,7 +48,7 @@ export function useCamera(): CameraState {
   }, []);
 
   const stop = useCallback(() => {
-    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     setStream(null);
   }, []);
@@ -50,10 +58,14 @@ export function useCamera(): CameraState {
     if (!video || video.readyState < 2) return null;
     setCapturing(true);
     try {
+      const width = video.videoWidth || 720;
+      const height = video.videoHeight || 960;
       const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+      ctx.drawImage(video, 0, 0, width, height);
       const blob = await new Promise<Blob | null>((resolve) =>
         canvas.toBlob(resolve, "image/jpeg", 0.9),
       );
@@ -73,7 +85,16 @@ export function useCamera(): CameraState {
 
   useEffect(() => () => stop(), [stop]);
 
-  return { stream, error, capturing, videoRef, start, stop, capture };
+  return {
+    stream,
+    error,
+    capturing,
+    active: !!stream,
+    videoRef,
+    start,
+    stop,
+    capture,
+  };
 }
 
 export function blobToBase64(blob: Blob): Promise<string> {

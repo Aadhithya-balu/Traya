@@ -1,6 +1,8 @@
 from app.models.entities import (  # noqa: F401
     AuditLog,
     BiometricEmbedding,
+    BiometricEnrollment,
+    BiometricEnrollmentSample,
     BiometricProfile,
     Consent,
     EmergencyContact,
@@ -11,17 +13,21 @@ from app.models.entities import (  # noqa: F401
     Location,
     MedicalProfile,
     Notification,
+    Permission,
     Role,
     SystemSetting,
     User,
     VisibleFeature,
     all_models,
+    role_permissions,
     user_roles,
 )
 
 __all__ = [
     "AuditLog",
     "BiometricEmbedding",
+    "BiometricEnrollment",
+    "BiometricEnrollmentSample",
     "BiometricProfile",
     "Consent",
     "EmergencyContact",
@@ -32,10 +38,12 @@ __all__ = [
     "Location",
     "MedicalProfile",
     "Notification",
+    "Permission",
     "Role",
     "SystemSetting",
     "User",
     "VisibleFeature",
     "all_models",
+    "role_permissions",
     "user_roles",
 ]

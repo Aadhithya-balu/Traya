@@ -1,151 +1,179 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, ApiError } from "../api/client";
-import type { BiometricStatus, Consent, EmergencyContact, MedicalProfile, TimelineEvent } from "../api/types";
-import { useAuth } from "../context/AuthContext";
+
+import { ApiError, api } from "../api/client";
+import type {
+  BiometricStatus,
+  Consent,
+  EmergencyContact,
+  TimelineEvent,
+} from "../api/types";
+import { useI18n } from "../i18n";
+import { CheckIcon, ChevronRightIcon } from "../components/icons";
 
 export function Dashboard() {
-  const { user } = useAuth();
-  const [bio, setBio] = useState<BiometricStatus | null>(null);
+  const { t } = useI18n();
+  const [biometric, setBiometric] = useState<BiometricStatus | null>(null);
   const [consents, setConsents] = useState<Consent[]>([]);
-  const [medical, setMedical] = useState<MedicalProfile | null>(null);
   const [contacts, setContacts] = useState<EmergencyContact[]>([]);
   const [history, setHistory] = useState<TimelineEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      const [b, c, m, ct, h] = await Promise.all([
-        api.biometricStatus(),
-        api.listConsents(),
-        api.getMedical(),
-        api.listContacts(),
-        api.accessHistory(),
-      ]);
-      setBio(b);
-      setConsents(c);
-      setMedical(m);
-      setContacts(ct);
-      setHistory(h);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Could not load dashboard data.");
-    }
-  }, []);
-
   useEffect(() => {
-    load();
-  }, [load]);
+    let cancelled = false;
+    // One round trip per concern, in parallel: the dashboard is a summary and
+    // should not serialise four independent requests on a phone.
+    Promise.all([
+      api.biometricStatus(),
+      api.listConsents(),
+      api.listContacts(),
+      api.accessHistory(),
+    ])
+      .then(([bio, con, con2, hist]) => {
+        if (cancelled) return;
+        setBiometric(bio);
+        setConsents(con);
+        setContacts(con2);
+        setHistory(hist);
+      })
+      .catch((err) => {
+        if (!cancelled)
+          setError(err instanceof ApiError ? err.detail : t("error.generic"));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [t]);
 
-  const bioConsent = consents.find((c) => c.consent_type === "biometric_enrollment");
+  const enrolled = biometric?.status === "enrolled";
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-10">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold text-white">Dashboard</h1>
-          <p className="mt-1 text-sm text-slate-400">{user?.full_name} · {user?.email}</p>
-        </div>
-        <div className="flex gap-2">
-          {user?.roles.map((r) => (
-            <span key={r} className="badge bg-slate-700 text-slate-300">
-              {r.replace(/_/g, " ")}
-            </span>
-          ))}
-        </div>
-      </div>
+    <div className="py-5">
+      <h1 className="text-2xl font-semibold tracking-tight">
+        {t("dashboard.title")}
+      </h1>
 
       {error && (
-        <div className="mt-4 rounded-lg border border-danger-500/30 bg-danger-500/10 p-3 text-sm text-danger-400">
+        <p className="mt-3 rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
           {error}
-        </div>
+        </p>
       )}
 
-      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatusCard
-          label="Biometric enrollment"
-          value={bio?.status ?? "—"}
-          good={bio?.status === "ENROLLED"}
+      <div className="mt-5 grid grid-cols-2 gap-3">
+        <Stat
+          label={t("profile.biometric.status")}
+          value={
+            enrolled
+              ? t("profile.biometric.enrolled")
+              : t("profile.biometric.not_enrolled")
+          }
+          tone={enrolled ? "ok" : "warn"}
         />
-        <StatusCard
-          label="Biometric consent"
-          value={bioConsent?.status ?? "NOT GRANTED"}
-          good={bioConsent?.status === "granted"}
+        <Stat
+          label={t("profile.contacts")}
+          value={String(contacts.length)}
+          tone={contacts.length ? "neutral" : "warn"}
         />
-        <StatusCard label="Emergency contacts" value={String(contacts.length)} good={contacts.length > 0} />
-        <StatusCard label="Blood group" value={medical?.blood_group ?? "—"} good={!!medical?.blood_group} />
+        <Stat
+          label={t("profile.biometric.samples")}
+          value={String(biometric?.num_samples ?? 0)}
+          tone="neutral"
+        />
+        <Stat
+          label={t("profile.consent")}
+          value={`${consents.filter((c) => c.status === "active").length}/${consents.length}`}
+          tone="neutral"
+        />
       </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <div className="card">
-          <h2 className="mb-3 font-semibold text-white">Be identified in an emergency</h2>
-          {bio?.status === "ENROLLED" ? (
-            <p className="text-sm text-slate-400">
-              Your face template is enrolled ({bio.num_samples} samples, algorithm {bio.algo_version ?? "current"})
-              and will be matched against emergency captures.
-            </p>
-          ) : (
-            <p className="mb-3 text-sm text-slate-400">
-              Face matching is what lets responders find you when you can't speak. It requires
-              your explicit biometric consent and a few sample photos.
-            </p>
-          )}
-          {bioConsent?.status !== "granted" ? (
-            <Link to="/profile" className="btn-primary mt-2">
-              Grant consent & enroll
-            </Link>
-          ) : bio?.status !== "ENROLLED" ? (
-            <Link to="/profile" className="btn-primary mt-2">
-              Enroll face samples
-            </Link>
-          ) : (
-            <Link to="/profile" className="btn-ghost mt-2">
-              Manage enrollment
-            </Link>
-          )}
-        </div>
+      {!enrolled && (
+        <Link
+          to="/profile"
+          className="card mt-4 flex items-center justify-between gap-3 border-accent"
+        >
+          <div>
+            <p className="text-sm font-semibold">{t("enroll.title")}</p>
+            <p className="mt-0.5 text-xs text-muted">{t("enroll.intro")}</p>
+          </div>
+          <ChevronRightIcon size={18} className="shrink-0 text-faint" />
+        </Link>
+      )}
 
-        <div className="card">
-          <h2 className="mb-3 font-semibold text-white">Consents</h2>
-          <ul className="space-y-2">
-            {consents.length === 0 && (
-              <li className="text-sm text-slate-500">No consents on record.</li>
-            )}
-            {consents.map((c) => (
-              <li key={c.consent_type} className="flex items-center justify-between rounded-lg border border-slate-800 bg-ink-900 p-3">
-                <span className="text-sm text-slate-300">{c.consent_type.replace(/_/g, " ")}</span>
-                <span className={`badge ${c.status === "granted" ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-700 text-slate-400"}`}>
-                  {c.status}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
-
-      <div className="mt-6 card">
-        <h2 className="mb-3 font-semibold text-white">Recent access history</h2>
-        {history.length === 0 && <p className="text-sm text-slate-500">No recorded access events.</p>}
-        <ul className="space-y-2">
-          {history.slice(0, 6).map((ev, i) => (
-            <li key={i} className="flex items-center justify-between rounded-lg border border-slate-800 bg-ink-900 p-3">
-              <span className="text-sm text-slate-300">{ev.action}</span>
-              <span className="text-xs text-slate-500">{new Date(ev.at).toLocaleString()}</span>
+      <section className="mt-6">
+        <h2 className="eyebrow">{t("profile.consent")}</h2>
+        <ul className="mt-2 space-y-2">
+          {consents.length === 0 && (
+            <li className="card-raised text-sm text-muted">
+              {t("common.none")}
+            </li>
+          )}
+          {consents.map((consent) => (
+            <li
+              key={`${consent.consent_type}-${consent.version}`}
+              className="card flex items-center justify-between"
+            >
+              <span className="text-sm">{consent.consent_type}</span>
+              <span
+                className={[
+                  "badge",
+                  consent.status === "active"
+                    ? "bg-ok/15 text-ok"
+                    : "bg-raised text-muted",
+                ].join(" ")}
+              >
+                {consent.status}
+              </span>
             </li>
           ))}
         </ul>
-      </div>
+      </section>
+
+      <section className="mt-6">
+        <h2 className="eyebrow">{t("dashboard.access")}</h2>
+        <ul className="mt-2 space-y-2">
+          {history.length === 0 && (
+            <li className="card-raised text-sm text-muted">
+              {t("dashboard.access.none")}
+            </li>
+          )}
+          {history.slice(0, 6).map((event, index) => (
+            <li key={`${event.at}-${index}`} className="card">
+              <div className="flex items-start gap-2">
+                <CheckIcon size={16} className="mt-0.5 shrink-0 text-faint" />
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">{event.action}</p>
+                  <p className="mt-0.5 text-xs text-faint">
+                    {new Date(event.at).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
     </div>
   );
 }
 
-function StatusCard({ label, value, good }: { label: string; value: string; good: boolean }) {
+function Stat({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "ok" | "warn" | "neutral";
+}) {
+  const valueClass =
+    tone === "ok"
+      ? "text-ok"
+      : tone === "warn"
+        ? "text-warn"
+        : "text-text";
   return (
     <div className="card">
-      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
-      <p className={`mt-1 truncate text-xl font-semibold ${good ? "text-emerald-300" : "text-slate-300"}`}>
-        {value}
-      </p>
+      <p className="text-xs leading-tight text-muted">{label}</p>
+      <p className={`mt-1.5 text-sm font-semibold ${valueClass}`}>{value}</p>
     </div>
   );
 }

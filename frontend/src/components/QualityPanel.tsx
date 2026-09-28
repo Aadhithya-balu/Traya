@@ -1,73 +1,90 @@
 import type { Quality } from "../api/types";
-import { QualityGauge } from "./StatusBadge";
+import { useI18n } from "../i18n";
+import { AlertIcon, CheckIcon } from "./icons";
 
-export function QualityPanel({ quality, compact = false }: { quality: Quality | null | undefined; compact?: boolean }) {
-  if (!quality) return null;
+/**
+ * Quality read-out.
+ *
+ * Shown before identification runs and again on the result. Each measurement
+ * is a real score from the engine, and a failing one is named rather than left
+ * for the person to infer from a bar.
+ */
+export function QualityPanel({
+  quality,
+  usable,
+}: {
+  quality: Quality;
+  usable?: boolean;
+}) {
+  const { t } = useI18n();
+  const isUsable = usable ?? quality.usable_for_matching;
 
-  if (compact) {
-    return (
-      <div className="rounded-lg border border-slate-800 bg-ink-900 p-3">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-medium text-slate-300">Capture quality</span>
-          <span
-            className={`badge ${
-              quality.usable_for_matching
-                ? "bg-emerald-500/15 text-emerald-300"
-                : "bg-danger-500/15 text-danger-400"
-            }`}
-          >
-            {quality.usable_for_matching ? "Usable" : "Rejected"}
-          </span>
-        </div>
-        <div className="mt-3 space-y-2">
-          <QualityGauge score={quality.image_quality_score} label="Image quality" />
-          <QualityGauge score={quality.face_visibility_score} label="Face visibility" />
-          <QualityGauge score={quality.occlusion_score} label="Occlusion" />
-          <QualityGauge score={quality.blur_score} label="Blur" />
-          <QualityGauge score={quality.lighting_score} label="Lighting" />
-        </div>
-        {quality.reasons.length > 0 && (
-          <ul className="mt-3 space-y-1">
-            {quality.reasons.map((r) => (
-              <li key={r} className="text-xs text-danger-400">
-                • {r}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    );
-  }
+  const rows = [
+    { key: "blur", label: t("emergency.quality.blur"), value: quality.blur_score },
+    { key: "light", label: t("emergency.quality.light"), value: quality.lighting_score },
+    { key: "face", label: t("emergency.quality.face"), value: quality.face_visibility_score },
+    {
+      key: "occlusion",
+      label: t("emergency.quality.occlusion"),
+      // The engine reports how much is clear, so a high number is good here
+      // while the other three read as "higher is better" too. No inversion.
+      value: quality.occlusion_score,
+    },
+  ];
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-      <QualityGauge score={quality.image_quality_score} label="Image quality" />
-      <QualityGauge score={quality.face_visibility_score} label="Face visibility" />
-      <QualityGauge score={quality.occlusion_score} label="Occlusion" />
-      <QualityGauge score={quality.blur_score} label="Blur" />
-      <QualityGauge score={quality.lighting_score} label="Lighting" />
-      <div className="flex items-center">
+    <section className="card">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">{t("emergency.quality.title")}</h2>
         <span
-          className={`badge ${
-            quality.usable_for_matching
-              ? "bg-emerald-500/15 text-emerald-300"
-              : "bg-danger-500/15 text-danger-400"
-          }`}
+          className={[
+            "badge shrink-0",
+            isUsable ? "bg-ok/15 text-ok" : "bg-danger/15 text-danger",
+          ].join(" ")}
         >
-          {quality.usable_for_matching ? "Usable for matching" : "Not usable"}
+          {isUsable ? (
+            <CheckIcon size={13} />
+          ) : (
+            <AlertIcon size={13} />
+          )}
+          {isUsable
+            ? t("emergency.quality.usable")
+            : t("emergency.quality.unusable")}
         </span>
       </div>
-      {quality.reasons.length > 0 && (
-        <div className="col-span-full">
-          <ul className="space-y-1">
-            {quality.reasons.map((r) => (
-              <li key={r} className="text-xs text-danger-400">
-                • {r}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
+
+      <dl className="mt-4 space-y-3">
+        {rows.map((row) => (
+          <div key={row.key}>
+            <div className="flex items-baseline justify-between text-xs">
+              <dt className="text-muted">{row.label}</dt>
+              <dd className="font-mono text-faint">
+                {Math.round(row.value * 100)}%
+              </dd>
+            </div>
+            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-raised">
+              <div
+                className={[
+                  "h-full rounded-full transition-[width] duration-300",
+                  row.value >= 0.5 ? "bg-text" : "bg-warn",
+                ].join(" ")}
+                style={{ width: `${Math.round(row.value * 100)}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </dl>
+
+      {quality.reasons?.length ? (
+        <ul className="mt-4 space-y-1 border-t border-line pt-3">
+          {quality.reasons.map((reason) => (
+            <li key={reason} className="flex items-start gap-2 text-xs text-muted">
+              <AlertIcon size={14} className="mt-px shrink-0 text-warn" />
+              <span>{reason}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
   );
 }

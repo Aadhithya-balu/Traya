@@ -1,116 +1,100 @@
 import { Link } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
 
-const FEATURES = [
-  {
-    title: "AI identity matching",
-    desc: "Quality-checked face capture is matched against encrypted enrollment templates to propose an identity for an unresponsive victim.",
-  },
-  {
-    title: "Medical alerts",
-    desc: "After a reliable match, only treatment-critical information is disclosed — blood type, critical allergies and conditions.",
-  },
-  {
-    title: "Emergency contact",
-    desc: "One tap notifies the victim's designated emergency contact with your verification and secure location.",
-  },
-  {
-    title: "Hospital routing",
-    desc: "Nearby emergency-capable hospitals are surfaced with distance and availability, so responders pick the right destination.",
-  },
-  {
-    title: "Privacy by design",
-    desc: "Biometric templates are encrypted at rest, never exposed to clients, and everything is audited. Minimal data, maximal safety.",
-  },
-  {
-    title: "Human confirmation",
-    desc: "Any uncertain match is held for human review — TRAYA never fabricates an identity.",
-  },
+import { useI18n, type StringKey } from "../i18n";
+import { ArrowIcon, CheckIcon } from "../components/icons";
+
+const FEATURES: Array<{ id: string; title: StringKey; body: StringKey }> = [
+  { id: "f1", title: "landing.f1.title", body: "landing.f1.body" },
+  { id: "f2", title: "landing.f2.title", body: "landing.f2.body" },
+  { id: "f3", title: "landing.f3.title", body: "landing.f3.body" },
+  { id: "f4", title: "landing.f4.title", body: "landing.f4.body" },
+  { id: "f5", title: "landing.f5.title", body: "landing.f5.body" },
+  { id: "f6", title: "landing.f6.title", body: "landing.f6.body" },
+];
+
+const STEPS: Array<{ title: StringKey; body: StringKey }> = [
+  { title: "landing.f1.title", body: "landing.f1.body" },
+  { title: "landing.f3.title", body: "landing.f3.body" },
+  { title: "landing.f4.title", body: "landing.f4.body" },
 ];
 
 export function Landing() {
-  const { isAuthed } = useAuth();
+  const { t } = useI18n();
 
   return (
-    <div>
-      <section className="relative overflow-hidden border-b border-slate-800">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_70%_-10%,rgba(20,184,166,0.18),transparent_55%)]" />
-        <div className="relative mx-auto max-w-6xl px-4 py-20 text-center sm:py-28">
-          <p className="mb-4 inline-block rounded-full border border-accent-500/30 bg-accent-500/10 px-4 py-1 text-xs font-medium text-accent-400">
-            Prototype · Synthetic demo data only
-          </p>
-          <h1 className="mx-auto max-w-3xl text-4xl font-bold leading-tight text-white sm:text-6xl">
-            Identify the unresponsive.{" "}
-            <span className="text-accent-400">Deliver the right care.</span>
-          </h1>
-          <p className="mx-auto mt-6 max-w-2xl text-lg text-slate-400">
-            TRAYA is an AI-assisted emergency victim identification platform. A single
-            photo of an unresponsive person flows through real quality checks, biometric
-            matching, medical alerting, contact notification and hospital routing.
-          </p>
-          <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-            <Link to="/emergency" className="btn-primary">
-              Start emergency session
-            </Link>
-            <Link to="/demo" className="btn-ghost">
-              Try the demo scenarios
-            </Link>
-            {!isAuthed && (
-              <Link to="/register" className="btn-ghost">
-                Create profile
-              </Link>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className="mx-auto max-w-6xl px-4 py-16">
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {FEATURES.map((f) => (
-            <div key={f.title} className="card">
-              <h3 className="mb-2 text-base font-semibold text-white">{f.title}</h3>
-              <p className="text-sm leading-relaxed text-slate-400">{f.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="border-t border-slate-800 bg-ink-950 py-14">
-        <div className="mx-auto max-w-4xl px-4 text-center">
-          <h2 className="text-2xl font-bold text-white">How it works</h2>
-          <ol className="mt-8 grid gap-6 text-left sm:grid-cols-3">
-            {[
-              ["1", "Capture", "A responder or bystander photographs the victim's face. Quality gates reject blurry, obstructed or multi-face images."],
-              ["2", "Match", "The face is embedded and compared against enrolled templates. Scores decide: high-confidence, review-required, or no match."],
-              ["3", "Respond", "Medical alerts, emergency contact, location and nearby hospitals are surfaced for the matched identity."],
-            ].map(([n, t, d]) => (
-              <li key={n} className="card">
-                <span className="mb-3 inline-flex h-8 w-8 items-center justify-center rounded-full bg-accent-500/15 font-mono text-sm font-bold text-accent-400">
-                  {n}
-                </span>
-                <h3 className="mb-1 font-semibold text-white">{t}</h3>
-                <p className="text-sm text-slate-400">{d}</p>
-              </li>
-            ))}
-          </ol>
-        </div>
-      </section>
-
-      <section className="mx-auto max-w-4xl px-4 py-14 text-center">
-        <h2 className="text-2xl font-bold text-white">Built for the golden hour</h2>
-        <p className="mx-auto mt-3 max-w-2xl text-slate-400">
-          Every second counts in a trauma situation. TRAYA keeps the loop tight: capture,
-          match, alert, route — without leaking private medical history to anyone who
-          doesn't need it.
+    <div className="py-6">
+      <section className="animate-rise">
+        <span className="badge border border-line text-muted">
+          {t("landing.badge")}
+        </span>
+        <h1 className="mt-4 text-3xl font-semibold leading-tight tracking-tight sm:text-4xl">
+          {t("landing.title")}
+        </h1>
+        <p className="mt-3 text-base leading-relaxed text-muted">
+          {t("landing.body")}
         </p>
-        <div className="mt-6 flex justify-center gap-3">
-          <Link to="/emergency" className="btn-primary">
-            Start now
+
+        {/* Full-width on a phone; side by side once there is room. */}
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+          <Link to="/emergency" className="btn btn-primary btn-lg btn-block">
+            <ArrowIcon size={20} />
+            {t("landing.cta.primary")}
           </Link>
-          <Link to="/privacy" className="btn-ghost">
-            Read the privacy model
+          <Link to="/demo" className="btn btn-ghost btn-lg btn-block">
+            {t("landing.cta.secondary")}
           </Link>
         </div>
+      </section>
+
+      <section className="mt-10">
+        <h2 className="eyebrow">{t("landing.features.title")}</h2>
+        <ul className="mt-3 space-y-2">
+          {FEATURES.map((feature) => (
+            <li key={feature.id} className="card flex gap-3">
+              <span className="mt-0.5 shrink-0 text-ok">
+                <CheckIcon size={18} />
+              </span>
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold">{t(feature.title)}</h3>
+                <p className="mt-1 text-sm leading-relaxed text-muted">
+                  {t(feature.body)}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="mt-10">
+        <h2 className="eyebrow">{t("landing.steps.title")}</h2>
+        <ol className="mt-3 space-y-3">
+          {STEPS.map((step, index) => (
+            <li key={step.title} className="flex gap-3">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-line text-xs font-semibold text-muted">
+                {index + 1}
+              </span>
+              <div className="min-w-0 pt-0.5">
+                <h3 className="text-sm font-semibold">{t(step.title)}</h3>
+                <p className="mt-1 text-sm leading-relaxed text-muted">
+                  {t(step.body)}
+                </p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <section className="mt-10">
+        <Link to="/emergency" className="btn btn-primary btn-lg btn-block">
+          {t("landing.cta.primary")}
+          <ArrowIcon size={20} />
+        </Link>
+        <Link
+          to="/register"
+          className="mt-3 block text-center text-sm text-muted underline underline-offset-4"
+        >
+          {t("auth.register.title")}
+        </Link>
       </section>
     </div>
   );

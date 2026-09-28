@@ -48,6 +48,12 @@ class RoleOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class PermissionOut(BaseModel):
+    name: str
+    description: str | None = None
+    roles: list[str] = []
+
+
 class UserSummary(BaseModel):
     id: str
     email: str
@@ -55,6 +61,7 @@ class UserSummary(BaseModel):
     phone: str | None = None
     is_active: bool = True
     roles: list[str] = []
+    permissions: list[str] = []
     created_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -166,6 +173,7 @@ class EmergencyStartRequest(BaseModel):
 class EmergencyStartOut(BaseModel):
     session_id: str
     session_code: str
+    session_token: str
     status: str
     started_at: datetime
     expires_at: datetime
@@ -214,6 +222,10 @@ class IdentifyOut(BaseModel):
     medical_alerts_available: bool = False
     quality: dict[str, Any] | None = None
     face_count: int = 0
+    # Which matcher produced this. "simulation" means the demo engine, which is
+    # not a production biometric and must not be used to identify a real person.
+    engine_mode: str = "simulation"
+    demo_mode: bool = False
 
 
 class ConfirmRequest(BaseModel):

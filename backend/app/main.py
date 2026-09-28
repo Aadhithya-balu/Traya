@@ -9,8 +9,10 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import api_router
 from app.config.settings import settings
+from app.database.service import db_service
 from app.database.session import SessionLocal, init_db
 from app.security.rate_limit import RateLimitMiddleware
+from app.services.identification.engine import get_engine
 
 logging.basicConfig(
     level=logging.INFO if settings.DEBUG else logging.WARNING,
@@ -67,7 +69,32 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.get("/api/health", tags=["system"])
 def health():
-    return {"status": "ok", "app": settings.APP_NAME, "mode": "demo" if settings.DEMO_MODE else "production"}
+    """Liveness plus a plain-language view of which database is in use.
+
+    The frontend renders ``status.state`` directly, so a Supabase outage
+    surfaces as "Demo Offline Mode" rather than a driver error.
+    """
+    db = db_service.health()
+    return {
+        "status": "ok",
+        "app": settings.APP_NAME,
+        "mode": "demo" if settings.DEMO_MODE else "production",
+        "database": db.as_dict(),
+        "state": _connection_state(db),
+        "recognition": {
+            "engine": settings.BIOMETRIC_ENGINE,
+            "model": settings.BIOMETRIC_ALGO_VERSION,
+            "simulation": get_engine().is_simulation,
+        },
+    }
+
+
+def _connection_state(db) -> str:
+    if db.degraded:
+        return "demo_offline"
+    if not db.checks.get("connect", True):
+        return "disconnected"
+    return "connected"
 
 
 @app.get("/{full_path:path}", include_in_schema=False)

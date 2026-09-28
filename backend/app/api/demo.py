@@ -18,14 +18,14 @@ from app.config.settings import settings
 from app.database.session import get_db
 from app.models import BiometricEmbedding, BiometricProfile, EmergencySession, Location, User
 from app.schemas import DemoRunOut, DemoScenarioOut, IdentifyOut
-from app.security.auth import get_current_user
+from app.security.auth import require_permission
 from app.security.crypto import encrypt_bytes
 from app.services.audit_service import log_session_action
 from app.services.demo.demo_images import render_face, to_base64, to_bytes, render_enrollment
 from app.services.identification.engine import get_engine
 from app.services.identification.pipeline import run_identification
 from app.services.identification.registry import serialize_embedding
-from app.utils.helpers import next_session_code
+from app.utils.helpers import issue_session_token, next_session_code
 
 logger = logging.getLogger("traya.demo")
 
@@ -118,9 +118,11 @@ def run_scenario(
     preview = to_base64(image)
 
     if session is None:
+        token, token_hash = issue_session_token()
         session = EmergencySession(
             session_code=next_session_code(db),
             access_type="demo",
+            access_token_hash=token_hash,
             status="active",
             expires_at=datetime.now(UTC) + timedelta(minutes=settings.EMERGENCY_SESSION_MINUTES),
         )
@@ -182,7 +184,7 @@ class DemoEnrollRequest(BaseModel):
 def demo_enroll(
     body: DemoEnrollRequest,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("enroll_biometric")),
     db: Session = Depends(get_db),
 ):
     """Enroll the current user with SYNTHETIC demo images (for demonstration)."""

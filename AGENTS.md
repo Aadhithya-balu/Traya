@@ -16,26 +16,31 @@ C:\Traya\
     app\
       api\            routers: auth, users, emergency, demo, biometric, hospitals, admin
       config\         pydantic-settings (settings.py)
-      database\       session, init_db
+      database\       session, init_db, probe + Supabase/SQLite fallback (service.py)
       models\         SQLAlchemy models
+      repositories\   the only layer that touches the database
       schemas\        Pydantic schemas
       security\       auth (JWT/roles), password, crypto (Fernet), rate_limit
       services\       demo (seed + synthetic image gen), identification (engine, pipeline,
                       registry, confidence), hospital, location, medical, notification, audit
       utils\          helpers (image decode, session codes)
       main.py         app factory, lifespan, health, SPA serving
-    migrations\       Alembic (env.py, script.py.mako, versions\a8c4ffbe90bd_initial_schema.py)
-    tests\            pytest suite (87 tests)
+    migrations\       Alembic (env.py, script.py.mako, versions\)
+    tests\            pytest suite (130 tests)
     requirements.txt
     alembic.ini, pytest.ini, .env.example
   frontend\           React 18 + TypeScript + Vite 5 + Tailwind 3 (no UI library)
     src\pages\        Landing, Login, Register, Emergency, EmergencyHub, Demo, Dashboard, Profile, Admin, Privacy
-    src\components\   Layout, Guards, StatusBadge, QualityPanel
+    src\components\   Layout, Guards, Sheet, Tabs, StatusBadge, QualityPanel, icons
     src\context\      AuthContext, EmergencyContext
+    src\hooks\        useCamera, useGeolocation
     src\api\          client.ts (relative /api), types.ts
-    vite.config.ts    base "./", dev proxy /api -> localhost:8000
-  scripts\dev-all.mjs Root launcher for backend + frontend
-  docs\ARCHITECTURE.md
+    src\i18n\         index.tsx, strings.ts (en + ta, 20 namespaces)
+    src\theme\        ThemeProvider.tsx
+    vite.config.ts    base "./", dev proxy /api -> 127.0.0.1:8000
+  scripts\            dev-all.mjs (root launcher), check-docs.mjs (docs enforcement)
+  docs\               ARCHITECTURE.md + backend/ + frontend/ + operations/ + decisions/
+  package.json        root: dev:all, docs:check, verify
   README.md
   AGENTS.md           (this file)
 ```
@@ -57,17 +62,21 @@ Run these from the repo root unless noted.
 | Task | Command |
 |---|---|
 | Run everything (dev) | `npm run dev:all` — backend :8000 + vite :5173; builds frontend once if `dist` missing |
+| Documentation check | `npm run docs:check` (alias: `npm run verify`) |
 | Backend tests | `cd backend; .venv\Scripts\python.exe -m pytest` |
 | Run backend only | `cd backend; .venv\Scripts\python.exe -m uvicorn app.main:app --port 8000` |
 | Run frontend only | `cd frontend; npm run dev` (http://localhost:5173) |
 | Frontend typecheck | `cd frontend; npm run typecheck` (`tsc --noEmit`) |
 | Frontend build | `cd frontend; npm run build` (runs `tsc --noEmit && vite build` → `frontend/dist`) |
 | Migrate to head | `cd backend; .venv\Scripts\python.exe -m alembic upgrade head` |
+| Migration drift check | `cd backend; .venv\Scripts\python.exe -m alembic check` |
 | New migration | `cd backend; .venv\Scripts\python.exe -m alembic revision --autogenerate -m "..."` |
 | Re-seed demo data | `cd backend; .venv\Scripts\python.exe -m app.services.demo.seed` |
 
-Verification is mandatory after code changes: run the backend test suite and
-`npm run build` (backend touches only the suite; frontend touches build).
+Verification is mandatory after code changes: run the backend test suite for
+backend changes, `npm run build` for frontend changes, and `npm run docs:check`
+for **any** change that adds or renames a component. See
+[the docs contract](docs/README.md#the-documentation-contract).
 
 ## App URLs
 
@@ -92,10 +101,15 @@ Verification is mandatory after code changes: run the backend test suite and
   SIMULATION mode. Face detection is simulated; quality gates are real.
 - Embedding = 12 explicit darkness-based features padded to 320 dims.
 - `similarity = clamp(1 - ||a - b|| / 3.0, 0, 1)`.
-- Verified reference points: clean same-identity >= 0.90; clean aarav 0.995;
-  degraded (noise 0.30 + occlusion 0.30) aarav 0.687.
+- Measured corpus results: clean same-identity 0.986-0.995, degraded
+  same-identity 0.711-0.866, **impostor 0.000-0.817 (mean 0.309)**. 6 of 30
+  impostor pairs exceed the 0.62 review threshold; two identities collide at
+  0.817. Reference point: degraded (noise 0.30 + occlusion 0.30) aarav 0.687.
+- `BIOMETRIC_ENGINE=opencv` does NOT give real detection here - it falls back
+  to the simulator while appearing to take the real path.
 - Thresholds (in DB, seeded): HIGH 0.82, REVIEW 0.62, FALLBACK_FACE 0.60,
-  CONTEXT_BOOST 0.05, SECONDARY_FEATURE_BOOST 0.06.
+  CONTEXT_BOOST 0.05, SECONDARY_FEATURE_BOOST 0.06. **Seeded DB rows override
+  the env vars**, so editing `.env` on a seeded database does nothing.
 - Statuses: `HIGH_CONFIDENCE`, `REVIEW_REQUIRED`, `LOW_CONFIDENCE`,
   `NO_MATCH`, `NO_FACE`, `MULTIPLE_FACES`, `POOR_QUALITY`.
 
@@ -142,22 +156,80 @@ Verification is mandatory after code changes: run the backend test suite and
   (`ALL_ROLES`, `ROLE_DESCRIPTIONS`). Rate limiting via `RateLimitMiddleware`.
 - DB access via `SessionLocal`/`get_db`; identification via
   `app/services/identification/pipeline.py::run_identification`.
+- New queries go in `app/repositories/`, never in a router or a service.
+  Repositories **flush but never commit** - the caller owns the transaction, so
+  a domain write and its audit row land together. A repository that commits
+  breaks that.
 - New tables/columns require an Alembic migration (`alembic revision
   --autogenerate`) plus a check that the demo seed remains idempotent on the
   migrated schema.
 
 ## Frontend conventions
 
-- Tailwind utility classes only; custom theme via `tailwind.config` (accent =
-  teal, `ink-*` = dark navy, `slate-*` = neutrals, `danger-*`, `warn-*`).
+- **Monochrome design system.** Colours are CSS custom properties in
+  `index.css`, mapped as the `ramp` object in `tailwind.config.js`:
+  `canvas`, `surface`, `raised`, `line`, `text`, `muted`, `faint`, `accent`,
+  plus `danger`, `warn`, `ok` and their `-fg` pairs. Light and dark share one
+  class name; there are no `dark:*` variants. `ink-*`/`slate-*` were **removed** -
+  do not reintroduce them.
+- `theme.spacing` is **replaced**, not extended. `0.5` is 0.125rem and there is
+  no `13`. Values outside the table produce nothing - the same silent failure
+  as an opacity modifier on a ramp colour.
+- Prefer a composed class from `@layer components` (`.btn`, `.card`, `.input`,
+  `.badge`, `.tap`, `.eyebrow`, `.scroll-x`) over a long `className`.
 - API calls go through `src/api/client.ts` (`api.*`) using relative `/api`
   paths; typed responses in `src/api/types.ts`. Auth state in `AuthContext`,
   emergency flow state in `EmergencyContext` (sessionStorage-backed, with a
   guarded `JSON.parse`).
 - Mobile-responsive: `grid-cols-1 sm:grid-cols-2` patterns, mobile nav exists
-  in `Layout.tsx`. Tables use `overflow-x-auto`.
+  in `Layout.tsx`. Tables use `overflow-x-auto`. 44px minimum touch target via
+  `.tap`.
+- Every user-visible string is an i18n key in `src/i18n/strings.ts`. Five
+  pages still hardcode English - see Known gaps.
 
-## Docs
+## Documentation
 
-- `README.md` — project overview and quickstart.
-- `docs/ARCHITECTURE.md` — pipeline, quality gates, embedding, security, demo mode.
+Documentation is part of the definition of done, not an afterthought.
+
+- `docs/README.md` is the index and states the contract. Read it before adding
+  anything.
+- **Every** router endpoint, ORM model, table, migration, repository method,
+  service function, settings field, permission, role, page, UI component, icon,
+  API client method and exported TypeScript type must be **named on its owning
+  docs page**. Adding a component without adding it to the docs fails
+  `npm run docs:check`, which is wired to `npm run verify`.
+- Write the reason, not the obvious. "Never commits implicitly, so the domain
+  write and its audit row share one transaction" prevents a future bug;
+  "calls the database" is noise.
+- Record the sharp edges. Every page, component and service documented here has
+  at least one behaviour that will surprise a reasonable reader, and it is
+  written down.
+- Never document intent that is not implemented. Where a feature is incomplete
+  or a component is dead code, the docs say so plainly. An aspirational doc is
+  worse than no doc.
+- Copy names, signatures and paths from source. When code and docs disagree,
+  the code is right and the doc is a bug.
+- Keep `# Heading` style, one H1 per page, and the breadcrumb line at the top
+  linking to `docs/README.md`.
+
+## Known gaps
+
+Documented in full at [docs/README.md](docs/README.md#accuracy-status). The
+short list, so you do not rediscover them:
+
+1. **The biometric engine is a simulation.** Measured impostor similarity
+   0.817, above the 0.62 review threshold. See [ADR 0001](docs/decisions/0001-simulation-biometric-engine.md).
+2. `database/` (`schema.sql`, `indexes.sql`, `rls.sql`, `seed.sql`,
+   `queries/*.sql`) **does not exist**. There is no row-level security;
+   authorization is enforced in Python only.
+3. `EmergencyHub`'s Match Result tab renders nothing, because `Emergency.tsx`
+   never calls `setResult`/`setSession`. `SimulationNotice` is consequently
+   never rendered anywhere.
+4. Tailwind ramp colours have no `<alpha-value>`, so every `/opacity` utility on
+   them (`bg-ok/15`, `bg-surface/95`) silently produces nothing.
+5. `EmergencyHub`, `Profile`, `Admin`, `Demo` and `Privacy` are still on the
+   removed `ink-*`/`slate-*` palette with hardcoded English.
+6. `Admin` has an invalid role name (`registered`, not `registered_user`) and
+   omits `hospital`.
+7. `backend/.env.example` documents 20 of the 36 settings.
+8. There is no frontend test runner.
