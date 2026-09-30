@@ -137,6 +137,21 @@ $env:DATABASE_URL="postgresql+psycopg://postgres.<REF>:<PASSWORD>@aws-0-<REGION>
 .venv\Scripts\python.exe -m alembic check
 ```
 
+**Three details in that URL are load-bearing, and each one fails differently.**
+
+| Detail | Why |
+|---|---|
+| `+psycopg` | `postgresql://` alone makes SQLAlchemy reach for `psycopg2`, which is not installed. The failure is `ModuleNotFoundError: No module named 'psycopg2'` from `create_engine`, before any network call — so it reads like a missing package rather than a bad URL. |
+| **Port 5432, not 6543** | 5432 is the session pooler. 6543 is the transaction pooler, which reserves prepared statements. Alembic migrations and SQLAlchemy both use them, and the failure surfaces as a driver-level error on the first multi-statement DDL, far from the cause. |
+| **Percent-encode the password** | A password containing any reserved character (`@` is common) breaks URL parsing, since the *last* `@` wins. `urlencode` it. |
+
+The percent-encoding has one further trap: Alembic writes the URL into a
+`ConfigParser`, where `%` starts an interpolation, so a correctly encoded
+password makes `alembic` itself fail with `invalid interpolation syntax` at
+position 56. `migrations/env.py` doubles the percent for that reason and
+Alembic un-escapes it on read. This is not hypothetical — it is the error a
+Supabase password containing `@` produces against an unpatched `env.py`.
+
 **Do not paste a schema.** All 22 tables come from `alembic upgrade head`, which
 also seeds the 7 roles and 18 permissions. Hand-writing a schema in the editor
 produces a second source of truth that drifts from the models, and the very next
@@ -235,18 +250,31 @@ $env:TRAYA_TEST_DATABASE_URL="postgresql+psycopg://postgres:traya_local_dev@127.
 Remove-Item Env:\TRAYA_TEST_DATABASE_URL
 ```
 
-The database must exist but be disposable. In this mode `conftest.py` drops and
-recreates the `public` schema before importing the app, so the run starts clean.
-That step is not optional decoration: SQLite gets a clean slate for free by
-deleting a file, Postgres does not, and without the reset the suite **passes
-once and then fails** with `409 duplicate email` on every subsequent run. A green
-first run is not evidence of an idempotent suite. Unset the variable and nothing
+The database must exist, but it does not have to be disposable — only
+writable. In this mode `conftest.py` creates a throwaway schema named
+`traya_test`, drops it if a previous run left it behind, creates it fresh, and
+runs the suite with `search_path=traya_test`.
+
+**It never touches `public`.** An earlier version of this file said
+`conftest.py` dropped and recreated `public`; that was true, and it was a loaded
+gun — one mis-set environment variable away from deleting the entire
+application schema on a real Supabase project. `DROP SCHEMA public CASCADE` is
+not a reset mechanism. The isolation is now structural: the application code
+never names a schema, so pointing `search_path` at `traya_test` puts every
+table, migration and query inside it while `public` stays untouched. Verified by
+running the suite against the real hosted project and confirming 22 tables still
+present in `public` afterwards.
+
+The reset is not optional decoration: SQLite gets a clean slate for free by
+deleting a file, Postgres does not, and without it the suite **passes once and
+then fails** with `409 duplicate email` on every subsequent run. A green first
+run is not evidence of an idempotent suite. Unset the variable and nothing
 changes.
 
 All 207 tests pass on both, verified in Phase 3 — and on Postgres that was
-confirmed across three consecutive runs, not one. The equality is the useful
-result: the schema stays genuinely portable, which is what lets the SQLite
-rollback path exist at all.
+confirmed across consecutive runs, not one, in a local container *and* against
+the hosted project. The equality is the useful result: the schema stays
+genuinely portable, which is what lets the SQLite rollback path exist at all.
 
 There is **no frontend test runner.** No component test, no hook test, no
 snapshot. Every frontend change is currently verified only by `tsc` and by

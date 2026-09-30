@@ -29,23 +29,40 @@ import uuid
 
 _TEST_PG_URL = os.environ.get("TRAYA_TEST_DATABASE_URL", "")
 
+# The Postgres runs happen in here, never in `public`.
+_TEST_SCHEMA = "traya_test"
+
 _TEST_DB = os.path.join(tempfile.gettempdir(), "traya_test.db")
 
 if _TEST_PG_URL:
     # SQLite gets a clean slate for free: the file is deleted, so the next run
     # starts from nothing. Postgres has no equivalent, and skipping the reset
     # makes the suite fail on the *second* run against the same database with
-    # `409 duplicate email` — a green first run hiding a suite that only works
-    # once. Drop the schema before any app import, so the first table created
-    # lands in a clean database.
+    # `409 duplicate email` - a green first run hiding a suite that only works
+    # once.
+    #
+    # It runs in a THROWAWAY SCHEMA, never `public`. `DROP SCHEMA public CASCADE`
+    # would work, and on a real Supabase project it would delete the entire
+    # application schema. One mis-set environment variable away from destroying
+    # production is not a reset mechanism. `search_path` is a connection option
+    # so the application code, which never names a schema, still resolves
+    # everything inside it.
     import psycopg
 
     # SQLAlchemy's `+psycopg` is a dialect name, not a libpq driver name.
-    # psycopg.connect() parses the string itself and chokes on it.
+    # psycopg.connect() parses the string itself and chokes on it. The URL is
+    # already percent-encoded, so it must not be quoted a second time.
     _pg_url = _TEST_PG_URL.replace("postgresql+psycopg://", "postgresql://", 1)
     with psycopg.connect(_pg_url, autocommit=True) as _pg:
-        _pg.execute("DROP SCHEMA public CASCADE")
-        _pg.execute("CREATE SCHEMA public")
+        _pg.execute(f"DROP SCHEMA IF EXISTS {_TEST_SCHEMA} CASCADE")
+        _pg.execute(f"CREATE SCHEMA {_TEST_SCHEMA}")
+
+    # Point the app's connections at the throwaway schema, and keep pgbouncer in
+    # transaction mode working: `options` is passed to libpq, not interpreted.
+    _sep = "&" if "?" in _TEST_PG_URL else "?"
+    _TEST_PG_URL = (
+        f"{_TEST_PG_URL}{_sep}options=-csearch_path%3D{_TEST_SCHEMA}"
+    )
 elif os.path.exists(_TEST_DB):
     os.remove(_TEST_DB)
 

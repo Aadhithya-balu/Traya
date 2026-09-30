@@ -20,7 +20,16 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# `set_main_option` writes into a ConfigParser, where `%` starts an
+# interpolation. A percent-encoded password (`@` -> `%40`, which any Supabase
+# password containing a reserved character will produce) therefore raises
+# "invalid interpolation syntax" before a single query is sent.
+#
+# Doubling the percent is the documented ConfigParser escape and Alembic
+# un-escapes it when the value is read back, so the engine receives the real
+# URL. Verified end to end against Supabase: a password containing `@` connects
+# only with this line present.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
