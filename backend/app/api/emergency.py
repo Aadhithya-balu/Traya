@@ -27,7 +27,8 @@ from app.schemas import (
     SessionStatusOut,
     TimelineEventOut,
 )
-from app.security.auth import get_current_user, require_roles
+from app.security.auth import get_current_user, get_effective_permissions, require_permission
+from app.security.tokens import decode_token
 from app.services.audit_service import log_session_action
 from app.services.identification.pipeline import (
     STATUS_HIGH,
@@ -39,7 +40,9 @@ from app.services.identification.pipeline import (
 from app.services.medical.medical_service import get_public_summary, get_responder_profile
 from app.utils.helpers import (
     hash_device_id,
+    issue_session_token,
     next_session_code,
+    session_token_matches,
     validate_and_decode_image,
 )
 
@@ -51,7 +54,22 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
-def _get_active_session(db: Session, session_id: str) -> EmergencySession:
+def _session_token(request: Request) -> str | None:
+    return request.headers.get("X-TRAYA-Session-Token")
+
+
+def _get_active_session(
+    db: Session, session_id: str, request: Request | None = None
+) -> EmergencySession:
+    """Load an emergency session and prove the caller is allowed to.
+
+    Possession of the session id is not authorization: the id travels in
+    request bodies and logs, and a bystander flow has no login. Every
+    read/write therefore requires either the session's own access token or a
+    signed-in responder token. Without this, any caller who guessed or
+    observed a session id could read a victim's medical summary and contact
+    numbers.
+    """
     session = db.get(EmergencySession, session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Emergency session not found")
@@ -63,7 +81,50 @@ def _get_active_session(db: Session, session_id: str) -> EmergencySession:
         session.status = "expired"
         db.commit()
         raise HTTPException(status_code=410, detail="Emergency session has expired")
+    if request is not None:
+        _authorize_session(session, request, db)
     return session
+
+
+def _authorize_session(session: EmergencySession, request: Request, db: Session) -> None:
+    if session_token_matches(
+        _session_token(request), session.access_token_hash
+    ):
+        return
+    # A signed-in responder holding `identify_person` may join the session:
+    # they are the one confirming the candidate and the one who needs the
+    # clinical detail.
+    if _responder_token_valid(request, db):
+        return
+    log_session_action(
+        db,
+        session.id,
+        "session.access_denied",
+        details={"path": request.url.path},
+        ip=_client_ip(request),
+        commit=False,
+    )
+    db.commit()
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="This emergency session is not accessible from this device",
+    )
+
+
+def _responder_token_valid(request: Request, db: Session) -> bool:
+    header = request.headers.get("Authorization", "")
+    if not header.lower().startswith("bearer "):
+        return False
+    try:
+        payload = decode_token(header.split(" ", 1)[1].strip())
+    except Exception:
+        return False
+    if payload.get("type") != "access":
+        return False
+    user = db.get(User, payload.get("sub") or "")
+    if user is None or not user.is_active:
+        return False
+    return "identify_person" in get_effective_permissions(db, user)
 
 
 def _client_ip(request: Request) -> str | None:
@@ -78,10 +139,12 @@ def start_session(
     db: Session = Depends(get_db),
 ):
     body = body or EmergencyStartRequest()
+    token, token_hash = issue_session_token()
     session = EmergencySession(
         session_code=next_session_code(db),
         access_type="public",
         initiator_id=None,
+        access_token_hash=token_hash,
         device_id=hash_device_id(body.device_id),
         ip_hash=None,
         expires_at=datetime.now(UTC) + timedelta(minutes=settings.EMERGENCY_SESSION_MINUTES),
@@ -114,6 +177,7 @@ def start_session(
     return EmergencyStartOut(
         session_id=session.id,
         session_code=session.session_code,
+        session_token=token,
         status=session.status,
         started_at=session.created_at,
         expires_at=session.expires_at,
@@ -121,8 +185,8 @@ def start_session(
 
 
 @router.get("/{session_id}", response_model=SessionStatusOut)
-def session_status(session_id: str, db: Session = Depends(get_db)):
-    session = _get_active_session(db, session_id)
+def session_status(session_id: str, request: Request, db: Session = Depends(get_db)):
+    session = _get_active_session(db, session_id, request)
     return SessionStatusOut(
         session_id=session.id,
         session_code=session.session_code,
@@ -147,7 +211,7 @@ def capture_image(
     db: Session = Depends(get_db),
 ):
     """Run image quality analysis for a captured image (no identification)."""
-    session = _get_active_session(db, session_id)
+    session = _get_active_session(db, session_id, request)
     raw = validate_and_decode_image(body.image)
 
     from app.services.identification.engine import get_engine
@@ -188,7 +252,7 @@ def identify(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    session = _get_active_session(db, session_id)
+    session = _get_active_session(db, session_id, request)
     raw = validate_and_decode_image(body.image)
     started = datetime.now(UTC)
 
@@ -227,10 +291,10 @@ def confirm(
     session_id: str,
     body: ConfirmRequest,
     request: Request,
-    user: User = Depends(require_roles("medical_responder", "police_responder", "admin")),
+    user: User = Depends(require_permission("confirm_identity")),
     db: Session = Depends(get_db),
 ):
-    session = _get_active_session(db, session_id)
+    session = _get_active_session(db, session_id, request)
     try:
         confirm_candidate(db, session, body.candidate_user_id, user.id, body.accept)
     except ValueError as exc:
@@ -254,7 +318,7 @@ def medical_summary(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    session = _get_active_session(db, session_id)
+    session = _get_active_session(db, session_id, request)
     if session.status != "completed" or session.identified_user_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -280,10 +344,10 @@ def medical_summary(
 def responder_profile(
     session_id: str,
     request: Request,
-    user: User = Depends(require_roles("medical_responder", "police_responder", "admin")),
+    user: User = Depends(require_permission("view_emergency_profile")),
     db: Session = Depends(get_db),
 ):
-    session = _get_active_session(db, session_id)
+    session = _get_active_session(db, session_id, request)
     if session.identified_user_id is None:
         raise HTTPException(status_code=404, detail="No identified user in this session")
     target = db.get(User, session.identified_user_id)
@@ -308,7 +372,7 @@ def contact_action(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    session = _get_active_session(db, session_id)
+    session = _get_active_session(db, session_id, request)
     if session.identified_user_id is None:
         raise HTTPException(status_code=403, detail="No identified user in this session")
     user = db.get(User, session.identified_user_id)
@@ -339,7 +403,7 @@ def capture_location(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    session = _get_active_session(db, session_id)
+    session = _get_active_session(db, session_id, request)
     loc = session.location
     if loc is None:
         loc = Location(session_id=session.id)
@@ -369,8 +433,8 @@ def capture_location(
 
 
 @router.get("/{session_id}/timeline", response_model=list[TimelineEventOut])
-def timeline(session_id: str, db: Session = Depends(get_db)):
-    session = _get_active_session(db, session_id)
+def timeline(session_id: str, request: Request, db: Session = Depends(get_db)):
+    session = _get_active_session(db, session_id, request)
     rows = (
         db.query(AuditLog)
         .filter(AuditLog.session_id == session.id)

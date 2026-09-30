@@ -2,38 +2,205 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: dark;
-}
+@layer base {
+  :root {
+    color-scheme: light;
 
-body {
-  @apply bg-ink-900 text-slate-100 antialiased;
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+    --c-canvas: #f6f6f5;
+    --c-surface: #ffffff;
+    --c-raised: #f0f0ef;
+    --c-line: #e2e2e0;
+    --c-line-strong: #c9c9c6;
+    --c-text: #17171a;
+    --c-muted: #5c5c63;
+    --c-faint: #8a8a92;
+
+    --c-accent: #17171a;
+    --c-accent-text: #17171a;
+    --c-accent-fg: #ffffff;
+
+    --c-danger: #b4231f;
+    --c-danger-fg: #ffffff;
+    --c-warn: #8a5a00;
+    --c-warn-fg: #ffffff;
+    --c-ok: #1f6b3a;
+    --c-ok-fg: #ffffff;
+
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .dark {
+    color-scheme: dark;
+
+    --c-canvas: #0a0a0b;
+    --c-surface: #131314;
+    --c-raised: #1c1c1e;
+    --c-line: #2a2a2d;
+    --c-line-strong: #3d3d41;
+    --c-text: #f2f2f0;
+    --c-muted: #a1a1a6;
+    --c-faint: #6e6e75;
+
+    --c-accent: #f2f2f0;
+    --c-accent-text: #f2f2f0;
+    --c-accent-fg: #0a0a0b;
+
+    --c-danger: #e5484d;
+    --c-danger-fg: #1a0a0a;
+    --c-warn: #f0b429;
+    --c-warn-fg: #1a1200;
+    --c-ok: #3fa45c;
+    --c-ok-fg: #06180c;
+  }
+
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  html {
+    /* Stop iOS Safari inflating text in landscape. */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-canvas text-text antialiased;
+    font-family: theme("fontFamily.sans");
+    /* Locks the whole document so a stray wide child cannot cause the
+       horizontal scroll that makes a page feel broken on a phone. */
+    overflow-x: hidden;
+  }
+
+  /* One consistent focus ring everywhere. Never removed, only restyled. */
+  :focus-visible {
+    @apply outline-none ring-2 ring-accent ring-offset-2 ring-offset-canvas;
+  }
+
+  ::selection {
+    background: var(--c-text);
+    color: var(--c-canvas);
+  }
 }
 
 @layer components {
+  /* ---------------------------------------------------------- touch sizes */
+  /* The iOS guideline is 44px; 2.75rem is 44px at the default root size. */
+  .tap {
+    @apply min-h-touch min-w-touch;
+  }
+
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-4
+           text-sm font-semibold transition-colors duration-150
+           disabled:pointer-events-none disabled:opacity-50;
+    min-height: 2.75rem;
   }
+
+  .btn-lg {
+    @apply px-5 text-base;
+    min-height: 3.25rem;
+  }
+
+  .btn-block {
+    @apply w-full;
+  }
+
   .btn-primary {
-    @apply btn bg-accent-500 text-ink-950 hover:bg-accent-400;
+    @apply bg-accent text-accent-fg active:opacity-90;
   }
+
   .btn-danger {
-    @apply btn bg-danger-500 text-white hover:bg-danger-400;
+    @apply bg-danger text-danger-fg active:opacity-90;
   }
+
   .btn-ghost {
-    @apply btn border border-slate-600 text-slate-200 hover:border-slate-400 hover:bg-slate-800;
+    @apply border border-line bg-surface text-text active:bg-raised;
   }
+
+  .btn-quiet {
+    @apply text-muted active:bg-raised;
+  }
+
   .card {
-    @apply rounded-xl border border-slate-800 bg-ink-800 p-5 shadow-sm;
+    @apply rounded-xl border border-line bg-surface p-4;
   }
+
+  .card-raised {
+    @apply rounded-xl border border-line bg-raised p-4;
+  }
+
   .input {
-    @apply w-full rounded-lg border border-slate-700 bg-ink-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-accent-500;
+    @apply w-full rounded-md border border-line bg-surface px-3 text-base text-text
+           placeholder:text-faint;
+    /* 16px stops iOS Safari zooming the viewport on focus. */
+    min-height: 2.75rem;
   }
+
   .label {
-    @apply mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400;
+    @apply mb-1.5 block text-xs font-medium uppercase tracking-wide text-muted;
   }
+
   .badge {
-    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium;
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1
+           text-xs font-medium leading-none;
+  }
+
+  .divider {
+    @apply border-t border-line;
+  }
+
+  /* A section title that reads as a heading without a heavy weight. */
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-wider text-faint;
+  }
+
+  /* Horizontal scroller for tab strips: no visible bar, still scrollable,
+     and it bleeds to the screen edge so it reads as scrollable. */
+  .scroll-x {
+    @apply flex gap-1 overflow-x-auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .scroll-x::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@layer utilities {
+  /* Padding that respects the notch in either orientation. */
+  .pt-safe {
+    padding-top: var(--safe-top);
+  }
+
+  .pb-safe {
+    padding-bottom: var(--safe-bottom);
+  }
+
+  .pb-tabbar {
+    padding-bottom: calc(4.25rem + var(--safe-bottom));
+  }
+
+  .pt-appbar {
+    padding-top: calc(3.5rem + var(--safe-top));
+  }
+
+  .mt-appbar {
+    margin-top: calc(3.5rem + var(--safe-top));
+  }
+
+  .h-appbar {
+    height: calc(3.5rem + var(--safe-top));
+  }
+
+  /* Respect a user's reduced-motion setting for every animation we ship. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }

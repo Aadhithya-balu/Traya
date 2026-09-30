@@ -1,10 +1,20 @@
-import { useState } from "react";
-import type { FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useAuth } from "../context/AuthContext";
+
 import { ApiError } from "../api/client";
+import { useAuth } from "../context/AuthContext";
+import { useI18n } from "../i18n";
+import { AlertIcon } from "../components/icons";
+
+const DEMO_ACCOUNTS = [
+  { email: "aarav.kumar@demo.traya", label: "Registered person" },
+  { email: "neha.rao@responder.traya", label: "Medical responder" },
+  { email: "admin@traya.io", label: "Administrator" },
+];
+const DEMO_PASSWORD = "TrayaDemo#2026";
 
 export function Login() {
+  const { t } = useI18n();
   const { login } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
@@ -12,84 +22,111 @@ export function Login() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
     setBusy(true);
+    setError(null);
     try {
-      await login(email.trim(), password);
-      navigate("/dashboard");
+      await login(email, password);
+      navigate("/dashboard", { replace: true });
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Login failed. Please try again.");
+      setError(err instanceof ApiError ? err.detail : t("error.generic"));
     } finally {
       setBusy(false);
     }
-  };
-
-  const fill = (demoEmail: string) => {
-    setEmail(demoEmail);
-    setPassword("TrayaDemo#2026");
-  };
+  }
 
   return (
-    <div className="mx-auto max-w-md px-4 py-16">
-      <h1 className="mb-1 text-2xl font-bold text-white">Log in</h1>
-      <p className="mb-6 text-sm text-slate-400">Access your TRAYA account.</p>
+    <div className="py-6">
+      <h1 className="text-2xl font-semibold tracking-tight">
+        {t("auth.login.title")}
+      </h1>
+      <p className="mt-1 text-sm text-muted">{t("auth.login.subtitle")}</p>
 
-      <form onSubmit={submit} className="card space-y-4">
+      {error && (
+        <div
+          role="alert"
+          className="mt-4 flex items-start gap-2 rounded-md border border-danger/40 bg-danger/10 p-3 text-sm text-danger"
+        >
+          <AlertIcon size={18} className="mt-px shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <form onSubmit={onSubmit} className="mt-6 space-y-4">
         <div>
-          <label className="label">Email</label>
+          <label className="label" htmlFor="email">
+            {t("auth.email")}
+          </label>
           <input
-            type="email"
+            id="email"
             className="input"
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            required
-            autoComplete="email"
           />
         </div>
         <div>
-          <label className="label">Password</label>
+          <label className="label" htmlFor="password">
+            {t("auth.password")}
+          </label>
           <input
-            type="password"
+            id="password"
             className="input"
+            type="password"
+            autoComplete="current-password"
+            required
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            required
-            autoComplete="current-password"
           />
         </div>
-
-        {error && <p className="text-sm text-danger-400">{error}</p>}
-
-        <button type="submit" className="btn-primary w-full" disabled={busy}>
-          {busy ? "Logging in…" : "Log in"}
+        <button type="submit" disabled={busy} className="btn btn-primary btn-lg btn-block">
+          {busy ? t("common.loading") : t("auth.login.submit")}
         </button>
       </form>
 
-      <div className="mt-6 rounded-xl border border-slate-800 bg-ink-800 p-4">
-        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-400">
-          Demo accounts (password: TrayaDemo#2026)
+      <p className="mt-4 text-center text-sm text-muted">
+        {t("auth.noAccount")}{" "}
+        <Link
+          to="/register"
+          className="font-medium text-text underline underline-offset-4"
+        >
+          {t("auth.register.title")}
+        </Link>
+      </p>
+
+      <div className="card-raised mt-8">
+        <h2 className="text-sm font-semibold">{t("auth.demo.title")}</h2>
+        <p className="mt-1 text-xs text-muted">
+          {t("auth.demo.body", { password: DEMO_PASSWORD })}
         </p>
-        <div className="flex flex-wrap gap-2">
-          {[
-            ["aarav.kumar@demo.traya", "Enrolled user"],
-            ["neha.rao@responder.traya", "Medical responder"],
-            ["admin@traya.io", "Admin"],
-          ].map(([em, label]) => (
-            <button key={em} onClick={() => fill(em)} className="btn-ghost !px-2.5 !py-1 text-xs">
-              {label}
+        <div className="mt-3 space-y-1">
+          {DEMO_ACCOUNTS.map((account) => (
+            <button
+              key={account.email}
+              type="button"
+              onClick={() => {
+                setEmail(account.email);
+                setPassword(DEMO_PASSWORD);
+              }}
+              className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2.5 text-left hover:bg-surface"
+            >
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium">
+                  {account.label}
+                </span>
+                <span className="block truncate text-xs text-faint">
+                  {account.email}
+                </span>
+              </span>
+              <span className="shrink-0 text-xs text-muted">Fill</span>
             </button>
           ))}
         </div>
       </div>
-
-      <p className="mt-4 text-center text-sm text-slate-400">
-        New here?{" "}
-        <Link to="/register" className="text-accent-400 hover:underline">
-          Create an account
-        </Link>
-      </p>
     </div>
   );
 }

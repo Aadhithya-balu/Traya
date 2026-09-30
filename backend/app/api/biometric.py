@@ -5,13 +5,21 @@ from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.database.session import get_db
-from app.models import BiometricEmbedding, BiometricProfile, Consent, User
+from app.models import BiometricProfile, User
+from app.repositories.profile import ProfileRepository
 from app.schemas import BiometricEnrollRequest, BiometricStatusOut
-from app.security.auth import get_current_user
+from app.security.auth import require_permission
+from app.security.crypto import encrypt_bytes
 from app.services.audit_service import log_user_action
+from app.services.biometric.enrollment import (
+    abort_enrollment,
+    add_sample,
+    complete_enrollment,
+    enrollment_state,
+    start_enrollment,
+)
 from app.services.identification.engine import get_engine
 from app.services.identification.registry import serialize_embedding
-from app.security.crypto import encrypt_bytes
 from app.utils.helpers import validate_and_decode_image
 
 router = APIRouter(prefix="/biometric", tags=["biometric"])
@@ -27,7 +35,7 @@ def _has_active_consent(user: User) -> bool:
 def enroll(
     body: BiometricEnrollRequest,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("enroll_biometric")),
     db: Session = Depends(get_db),
 ):
     """Enroll facial embeddings from several images. Requires explicit consent.
@@ -69,26 +77,20 @@ def enroll(
             ),
         )
 
-    profile = user.biometric_profile
+    repo = ProfileRepository(db)
+    profile = repo.biometric(user.id)
     if profile is None:
         profile = BiometricProfile(user_id=user.id)
         db.add(profile)
     profile.status = "enrolled"
-    profile.algo_version = settings.BIOMETRIC_ALGO_VERSION
-    profile.num_samples = len(vectors)
     profile.enrolled_at = datetime.now(UTC)
     db.flush()
 
-    for row in db.query(BiometricEmbedding).filter(BiometricEmbedding.profile_id == profile.id):
-        db.delete(row)
-    for vec in vectors:
-        db.add(
-            BiometricEmbedding(
-                profile_id=profile.id,
-                embedding_blob=encrypt_bytes(serialize_embedding(vec)),
-                algo_version=settings.BIOMETRIC_ALGO_VERSION,
-            )
-        )
+    repo.replace_embeddings(
+        profile,
+        [encrypt_bytes(serialize_embedding(vec)) for vec in vectors],
+        settings.BIOMETRIC_ALGO_VERSION,
+    )
     db.commit()
 
     log_user_action(
@@ -109,7 +111,7 @@ def enroll(
 
 
 @router.get("/status", response_model=BiometricStatusOut)
-def biometric_status(user: User = Depends(get_current_user)):
+def biometric_status(user: User = Depends(require_permission("enroll_biometric"))):
     profile = user.biometric_profile
     if profile is None:
         return BiometricStatusOut(status="not_enrolled")
@@ -119,3 +121,59 @@ def biometric_status(user: User = Depends(get_current_user)):
         num_samples=profile.num_samples,
         algo_version=profile.algo_version,
     )
+
+
+# ------------------------------------------------------------------ guided
+# The guided flow is the primary enrollment path. The legacy multi-upload
+# endpoint above is retained for the demo and API clients, but the app UI
+# drives start -> sample -> complete.
+@router.post("/enrollment/start", response_model=dict)
+def start_guided_enrollment(
+    user: User = Depends(require_permission("enroll_biometric")),
+    db: Session = Depends(get_db),
+):
+    """Begin a coached enrollment and return the pose sequence to walk through."""
+    enrollment = start_enrollment(db, user)
+    return enrollment_state(enrollment)
+
+
+@router.post("/enrollment/{enrollment_id}/sample", response_model=dict)
+def submit_enrollment_sample(
+    enrollment_id: str,
+    body: BiometricEnrollRequest,
+    user: User = Depends(require_permission("enroll_biometric")),
+    db: Session = Depends(get_db),
+):
+    """Grade one capture against the current step.
+
+    Returns the verdict with guidance codes the UI turns into plain-language
+    prompts, plus the updated progress state.
+    """
+    image = body.images[0] if body.images else None
+    if not image:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A single image is required per sample",
+        )
+    enrollment, verdict = add_sample(db, user, enrollment_id, image)
+    return {"verdict": verdict.to_dict(), "state": enrollment_state(enrollment)}
+
+
+@router.post("/enrollment/{enrollment_id}/complete", response_model=dict)
+def finish_enrollment(
+    enrollment_id: str,
+    user: User = Depends(require_permission("enroll_biometric")),
+    db: Session = Depends(get_db),
+):
+    """Promote the collected samples to the live biometric profile."""
+    return complete_enrollment(db, user, enrollment_id)
+
+
+@router.delete("/enrollment/{enrollment_id}", response_model=dict)
+def cancel_enrollment(
+    enrollment_id: str,
+    user: User = Depends(require_permission("enroll_biometric")),
+    db: Session = Depends(get_db),
+):
+    abort_enrollment(db, user, enrollment_id)
+    return {"status": "abandoned", "enrollment_id": enrollment_id}

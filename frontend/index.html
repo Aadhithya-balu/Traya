@@ -2,13 +2,33 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0b1220" />
+    <!-- viewport-fit=cover lets the layout extend under the notch, which the
+         safe-area padding variables then account for. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#f6f6f5" />
     <meta
       name="description"
-      content="TRAYA - AI-powered emergency victim identification and rapid response"
+      content="Traya - identify an unresponsive person from a single photo and reach the right people fast."
     />
-    <title>TRAYA · Emergency Identification</title>
+    <title>Traya</title>
+    <script>
+      // Apply the stored theme before first paint so there is no flash of the
+      // wrong colour scheme. Mirrors src/theme/index.tsx.
+      (function () {
+        try {
+          var stored = localStorage.getItem("traya_theme");
+          var dark = stored
+            ? stored === "dark"
+            : window.matchMedia("(prefers-color-scheme: dark)").matches;
+          if (dark) document.documentElement.classList.add("dark");
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", dark ? "#0a0a0b" : "#f6f6f5");
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

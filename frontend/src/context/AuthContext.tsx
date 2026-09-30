@@ -16,6 +16,8 @@ interface AuthState {
   logout: () => void;
   isAuthed: boolean;
   hasRole: (...roles: string[]) => boolean;
+  /** True when the signed-in account holds the given permission. */
+  can: (permission: string) => boolean;
   refreshUser: () => Promise<void>;
 }
 
@@ -74,9 +76,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [user],
   );
 
+  // Roles decide which tabs a person sees; permissions decide what they can
+  // actually do. Gating on permissions keeps the UI from offering an action the
+  // API would refuse.
+  const can = useCallback(
+    (permission: string) => !!user?.permissions?.includes(permission),
+    [user],
+  );
+
   return (
     <AuthContext.Provider
-      value={{ user, loading, login, register, logout, isAuthed: !!user, hasRole, refreshUser }}
+      value={{
+        user,
+        loading,
+        login,
+        register,
+        logout,
+        isAuthed: !!user,
+        hasRole,
+        can,
+        refreshUser,
+      }}
     >
       {children}
     </AuthContext.Provider>

@@ -36,7 +36,14 @@ def _ellipse(draw: ImageDraw.ImageDraw, cx, cy, rx, ry, color, outline=None):
     )
 
 
-def _draw_face(draw: ImageDraw.ImageDraw, irng: random.Random, cx: float, cy: float, scale: float = 1.0) -> None:
+def _draw_face(
+    draw: ImageDraw.ImageDraw,
+    irng: random.Random,
+    cx: float,
+    cy: float,
+    scale: float = 1.0,
+    head_yaw: float = 0.0,
+) -> None:
     skin_tone = irng.choice(
         [
             (238, 222, 205),  # light
@@ -87,14 +94,18 @@ def _draw_face(draw: ImageDraw.ImageDraw, irng: random.Random, cx: float, cy: fl
     _ellipse(draw, cx, cy + 4 * scale, face_rx, face_ry, skin)
     # hair style
     hair_top = cy - face_ry - hair_top_extra
+    # The dark hair mass is what a luminance-based pose estimate keys on, so a
+    # turned head sweeps it sideways too -- otherwise the head reads as frontal
+    # no matter where the features go.
+    hx = cx + head_yaw * face_rx * 0.45
     hair_style = irng.choice(["cap", "top", "side", "none"])
     if hair_style == "cap":
         draw.polygon(
-            [(cx - face_rx, cy - 20 * scale), (cx - face_rx - 8 * scale, hair_top), (cx + face_rx + 8 * scale, hair_top), (cx + face_rx, cy - 20 * scale)],
+            [(hx - face_rx, cy - 20 * scale), (hx - face_rx - 8 * scale, hair_top), (hx + face_rx + 8 * scale, hair_top), (hx + face_rx, cy - 20 * scale)],
             fill=hair,
         )
         draw.arc(
-            [cx - face_rx, hair_top - 34 * scale, cx + face_rx, hair_top + 34 * scale],
+            [hx - face_rx, hair_top - 34 * scale, hx + face_rx, hair_top + 34 * scale],
             start=180,
             end=360,
             fill=hair,
@@ -102,13 +113,13 @@ def _draw_face(draw: ImageDraw.ImageDraw, irng: random.Random, cx: float, cy: fl
         )
     elif hair_style == "top":
         draw.polygon(
-            [(cx - face_rx * 0.8, hair_top + 20 * scale), (cx, hair_top - 26 * scale), (cx + face_rx * 0.8, hair_top + 20 * scale)],
+            [(hx - face_rx * 0.8, hair_top + 20 * scale), (hx, hair_top - 26 * scale), (hx + face_rx * 0.8, hair_top + 20 * scale)],
             fill=hair,
         )
     elif hair_style == "side":
         for side in (-1, 1):
             draw.arc(
-                [cx + side * face_rx - 22 * scale, hair_top - 10 * scale, cx + side * face_rx + 14 * scale, hair_top + 46 * scale],
+                [hx + side * face_rx - 22 * scale, hair_top - 10 * scale, hx + side * face_rx + 14 * scale, hair_top + 46 * scale],
                 start=90 if side == -1 else 270,
                 end=270 if side == -1 else 450,
                 fill=hair,
@@ -119,28 +130,32 @@ def _draw_face(draw: ImageDraw.ImageDraw, irng: random.Random, cx: float, cy: fl
     draw.line([(cx - eye_gap - 6 * scale, cy - brow_dy), (cx - brow_w, cy - brow_dy + 4 * scale)], fill=hair, width=4)
     draw.line([(cx + eye_gap + 6 * scale, cy - brow_dy), (cx + brow_w, cy - brow_dy + 4 * scale)], fill=hair, width=4)
     # eyes
-    _ellipse(draw, cx - eye_gap, cy - 6 * scale, eye_r, eye_r * 1.3, (255, 255, 255))
-    _ellipse(draw, cx + eye_gap, cy - 6 * scale, eye_r, eye_r * 1.3, (255, 255, 255))
-    _ellipse(draw, cx - eye_gap, cy - 5 * scale, eye_r * 0.5, eye_r * 0.7, eye)
-    _ellipse(draw, cx + eye_gap, cy - 5 * scale, eye_r * 0.5, eye_r * 0.7, eye)
+    # head_yaw shifts the features sideways inside the head outline, which is
+    # what a turned face actually looks like in a tight crop. Image-space
+    # convention: negative moves features toward the left of the frame.
+    fx = cx + head_yaw * face_rx * 0.6
+    _ellipse(draw, fx - eye_gap, cy - 6 * scale, eye_r, eye_r * 1.3, (255, 255, 255))
+    _ellipse(draw, fx + eye_gap, cy - 6 * scale, eye_r, eye_r * 1.3, (255, 255, 255))
+    _ellipse(draw, fx - eye_gap, cy - 5 * scale, eye_r * 0.5, eye_r * 0.7, eye)
+    _ellipse(draw, fx + eye_gap, cy - 5 * scale, eye_r * 0.5, eye_r * 0.7, eye)
     # glasses (identity-distinguishing, thick dark frames inside the face)
     if irng.random() < 0.35:
         shape = irng.choice(["round", "rect"])
         for side in (-1, 1):
-            ex = cx + side * eye_gap
+            ex = fx + side * eye_gap
             if shape == "round":
                 draw.ellipse([ex - eye_r - 6 * scale, cy - 8 * scale, ex + eye_r + 6 * scale, cy + 8 * scale], outline=(25, 25, 30), width=3)
             else:
                 draw.rectangle([ex - eye_r - 7 * scale, cy - 10 * scale, ex + eye_r + 7 * scale, cy + 9 * scale], outline=(25, 25, 30), width=3)
-        draw.line([(cx - eye_gap + eye_r + 6 * scale, cy - 4 * scale), (cx + eye_gap - eye_r - 6 * scale, cy - 4 * scale)], fill=(25, 25, 30), width=3)
+        draw.line([(fx - eye_gap + eye_r + 6 * scale, cy - 4 * scale), (fx + eye_gap - eye_r - 6 * scale, cy - 4 * scale)], fill=(25, 25, 30), width=3)
     # nose
-    draw.line([(cx, cy + 6 * scale), (cx - 4 * scale, cy + 6 * scale + nose_len), (cx + 6 * scale, cy + 5 * scale + nose_len)], fill=(160, 110, 90), width=2)
+    draw.line([(fx, cy + 6 * scale), (fx - 4 * scale, cy + 6 * scale + nose_len), (fx + 6 * scale, cy + 5 * scale + nose_len)], fill=(160, 110, 90), width=2)
     # mouth: line or open
     mouth_y = cy + 44 * scale
     if irng.random() < 0.45:
-        draw.ellipse([cx - mouth_w, mouth_y - 5 * scale, cx + mouth_w, mouth_y + 8 * scale], fill=(95, 35, 40))
+        draw.ellipse([fx - mouth_w, mouth_y - 5 * scale, fx + mouth_w, mouth_y + 8 * scale], fill=(95, 35, 40))
     else:
-        draw.line([(cx - mouth_w, mouth_y), (cx + mouth_w, mouth_y)], fill=(150, 60, 60), width=3)
+        draw.line([(fx - mouth_w, mouth_y), (fx + mouth_w, mouth_y)], fill=(150, 60, 60), width=3)
     # beard (identity-distinguishing, dark region on the chin area)
     beard_style = irng.choice(["none", "none", "full", "goatee"])
     if beard_style == "full":
@@ -166,6 +181,33 @@ def _draw_face(draw: ImageDraw.ImageDraw, irng: random.Random, cx: float, cy: fl
         draw.line([(sx, sy), (sx + 12 * scale, sy + 6 * scale)], fill=(140, 70, 70), width=3)
 
 
+def _shade_turned_head(img: Image.Image, head_yaw: float) -> Image.Image:
+    """Darken the trailing side of the head, as a turned face self-shadows.
+
+    The far cheek falls into shadow, which is the cue a luminance-based pose
+    estimate actually uses. A full-frame ramp would darken the background too
+    and pull the whole image toward an "unlit" verdict, so the shading is
+    confined to a vertical band over the head.
+    """
+    arr = np.asarray(img, dtype=np.float32)
+    height, width = arr.shape[:2]
+
+    band = np.ones(width, dtype=np.float32)
+    centre = width / 2.0
+    strength = min(1.0, abs(head_yaw)) * 0.55
+    if head_yaw < 0:
+        # features moved left, so the right side of the face turns away
+        ramp = np.clip((np.arange(width) - centre) / (width * 0.35), 0.0, 1.0)
+    else:
+        ramp = np.clip((centre - np.arange(width)) / (width * 0.35), 0.0, 1.0)
+    band = 1.0 - ramp * strength
+
+    col = band[None, :, None]
+    rows = np.linspace(1.0, 1.0, height, dtype=np.float32)[:, None, None]
+    out = arr * col * rows
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+
+
 def render_face(
     seed: str | int,
     *,
@@ -177,12 +219,17 @@ def render_face(
     bright: bool = False,
     occluded: float = 0.0,
     small_face: bool = False,
+    head_yaw: float = 0.0,
 ) -> Image.Image:
     """Render a synthetic face image with optional degradations.
 
     Geometry and coloring are derived from `identity` (or `seed`), so that
     enrollment and capture images of the same identity share appearance while
     per-capture `seed` randomness varies lighting/noise only.
+
+    ``head_yaw`` in (-1, 1) turns the face in image space (negative = features
+    move toward the left of the frame) and shades the trailing side, so
+    guided-enrollment tests have captures that really do read as turned.
     """
     rng = _rng(seed)
     irng = _rng(identity if identity is not None else seed)
@@ -205,10 +252,13 @@ def render_face(
             scale = 0.45
             _draw_face(draw, irng, W / 2, H / 2 + 40, scale)
         else:
-            _draw_face(draw, irng, W / 2, H / 2 - 20, 1.0)
+            _draw_face(draw, irng, W / 2, H / 2 - 20, 1.0, head_yaw=head_yaw)
     elif faces == 2:
         _draw_face(draw, irng, W * 0.30, H / 2 - 20, 0.75)
         _draw_face(draw, irng, W * 0.70, H / 2 - 20, 0.75)
+
+    if head_yaw and faces == 1 and not small_face:
+        img = _shade_turned_head(img, head_yaw)
 
     # degradations
     if blur:

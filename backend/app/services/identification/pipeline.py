@@ -72,6 +72,12 @@ class PipelineResult:
             "medical_alerts_available": self.status == STATUS_HIGH and bool(self.candidates),
             "quality": self.quality,
             "face_count": self.face_count,
+            # Stated on every result. The demo engine is a feature-distance
+            # heuristic over synthetic-style renders, not a trained biometric,
+            # and it produces false accepts against similar faces. A consumer
+            # must be able to see that without reading the logs.
+            "engine_mode": get_engine().mode,
+            "demo_mode": settings.DEMO_MODE,
         }
 
 

@@ -24,7 +24,7 @@ from app.models import (
     User,
     VisibleFeature,
 )
-from app.security.auth import ALL_ROLES, ROLE_DESCRIPTIONS
+from app.security.auth import ALL_ROLES, ROLE_DESCRIPTIONS, ensure_permission_matrix
 from app.security.crypto import encrypt_bytes
 from app.security.password import hash_password
 from app.services.demo.demo_images import render_enrollment, to_bytes
@@ -110,6 +110,7 @@ DEMO_USERS: list[dict] = [
 DEMO_RESPONDERS: list[dict] = [
     {"full_name": "Dr. Neha Rao", "email": "neha.rao@responder.traya", "phone": "+91 98900 12321", "role": "medical_responder"},
     {"full_name": "Inspector Suresh Patil", "email": "suresh.patil@responder.traya", "phone": "+91 98000 55443", "role": "police_responder"},
+    {"full_name": "Dr. Karthik Raman", "email": "karthik.raman@responder.traya", "phone": "+91 98100 44556", "role": "hospital"},
     {"full_name": "TRAYA Admin", "email": "admin@traya.io", "phone": "+91 97900 00001", "role": "admin"},
     {"full_name": "TRAYA Auditor", "email": "auditor@traya.io", "phone": "+91 97900 00002", "role": "auditor"},
 ]
@@ -147,6 +148,7 @@ def seed_roles(db: Session) -> dict[str, Role]:
             db.flush()
         roles[name] = role
     db.commit()
+    ensure_permission_matrix(db)
     return roles
 
 
@@ -327,6 +329,9 @@ def seed_all(skip_if_seeded: bool = False) -> None:
     engine = get_engine()
     db: Session = SessionLocal()
     try:
+        # The permission matrix is part of the schema contract, not demo
+        # data, so it is always reconciled even on a fast-path boot.
+        ensure_permission_matrix(db)
         if (
             skip_if_seeded
             and db.query(User).filter(User.email == "aarav.kumar@demo.traya").first() is not None

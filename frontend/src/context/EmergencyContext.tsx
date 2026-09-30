@@ -8,6 +8,7 @@ interface EmergencyState {
   previewImage: string | null;
   setSession: (sessionId: string) => void;
   setResult: (result: IdentifyResult, preview: string | null) => void;
+  setPreview: (preview: string | null) => void;
   clear: () => void;
 }
 
@@ -27,7 +28,7 @@ export function EmergencyProvider({ children }: { children: ReactNode }) {
       return null;
     }
   });
-  const [previewImage, setPreview] = useState<string | null>(() =>
+  const [previewImage, setPreviewState] = useState<string | null>(() =>
     sessionStorage.getItem("traya_emergency_preview"),
   );
 
@@ -40,7 +41,13 @@ export function EmergencyProvider({ children }: { children: ReactNode }) {
     sessionStorage.setItem("traya_emergency_result", JSON.stringify(r));
     if (preview) sessionStorage.setItem("traya_emergency_preview", preview);
     setResultState(r);
-    setPreview(preview);
+    setPreviewState(preview);
+  }, []);
+
+  const setPreview = useCallback((preview: string | null) => {
+    if (preview) sessionStorage.setItem("traya_emergency_preview", preview);
+    else sessionStorage.removeItem("traya_emergency_preview");
+    setPreviewState(preview);
   }, []);
 
   const clear = useCallback(() => {
@@ -49,11 +56,21 @@ export function EmergencyProvider({ children }: { children: ReactNode }) {
     sessionStorage.removeItem("traya_emergency_preview");
     setSessionId(null);
     setResultState(null);
-    setPreview(null);
+    setPreviewState(null);
   }, []);
 
   return (
-    <Ctx.Provider value={{ sessionId, result, previewImage, setSession, setResult, clear }}>
+    <Ctx.Provider
+      value={{
+        sessionId,
+        result,
+        previewImage,
+        setSession,
+        setResult,
+        setPreview,
+        clear,
+      }}
+    >
       {children}
     </Ctx.Provider>
   );

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 import re
+import secrets
 from datetime import UTC, datetime
 from typing import Any
 
@@ -36,6 +37,26 @@ def hash_device_id(device_id: str | None) -> str | None:
     if not device_id:
         return None
     return hashlib.sha256(device_id.encode("utf-8")).hexdigest()[:32]
+
+
+def issue_session_token() -> tuple[str, str]:
+    """Mint an emergency-session access token.
+
+    Returns ``(token, hash)``. Only the hash is stored, so a database leak
+    does not hand an attacker live session access.
+    """
+    token = secrets.token_urlsafe(32)
+    return token, hash_session_token(token)
+
+
+def hash_session_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def session_token_matches(token: str | None, stored_hash: str | None) -> bool:
+    if not token or not stored_hash:
+        return False
+    return secrets.compare_digest(hash_session_token(token), stored_hash)
 
 
 _MAX_SIZE = settings.MAX_UPLOAD_BYTES

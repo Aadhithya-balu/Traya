@@ -2,16 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.database.session import get_db
-from app.models import (
-    AuditLog,
-    BiometricProfile,
-    Consent,
-    EmergencyContact,
-    MedicalProfile,
-    Notification,
-    User,
-    VisibleFeature,
-)
+from app.models import User
+from app.repositories.audit import AuditRepository
+from app.repositories.notification import NotificationRepository
+from app.repositories.profile import ProfileRepository
 from app.schemas import (
     BiometricStatusOut,
     ConsentIn,
@@ -27,15 +21,17 @@ from app.schemas import (
     VisibleFeatureIn,
     VisibleFeatureOut,
 )
-from app.security.auth import get_current_user
+from app.security.auth import get_current_user, require_permission
 from app.security.password import verify_password
 from app.services.audit_service import log_user_action
 
 router = APIRouter(prefix="/users", tags=["users"])
 
+MAX_CONTACTS = 10
+
 
 @router.get("/profile", response_model=dict)
-def get_profile(user: User = Depends(get_current_user)):
+def get_profile(user: User = Depends(require_permission("manage_own_profile"))):
     return {
         "id": user.id,
         "email": user.email,
@@ -51,7 +47,7 @@ def get_profile(user: User = Depends(get_current_user)):
 def update_profile(
     body: UpdateProfileRequest,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("manage_own_profile")),
     db: Session = Depends(get_db),
 ):
     if body.full_name is not None:
@@ -68,7 +64,7 @@ def update_profile(
 
 # ------------------------------------------------------------------ medical
 @router.get("/medical", response_model=MedicalProfileOut)
-def get_medical(user: User = Depends(get_current_user)):
+def get_medical(user: User = Depends(require_permission("manage_own_profile"))):
     profile = user.medical_profile
     if profile is None:
         return MedicalProfileOut()
@@ -87,22 +83,20 @@ def get_medical(user: User = Depends(get_current_user)):
 def update_medical(
     body: MedicalProfileIn,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("manage_own_profile")),
     db: Session = Depends(get_db),
 ):
-    profile = user.medical_profile
-    if profile is None:
-        profile = MedicalProfile(user_id=user.id)
-        db.add(profile)
-        user.medical_profile = profile
-    profile.blood_group = body.blood_group
-    profile.allergies = body.allergies
-    profile.conditions = body.conditions
-    profile.medications = body.medications
-    profile.emergency_notes = body.emergency_notes
-    profile.preferred_hospital = body.preferred_hospital
-    profile.home_lat = body.home_lat
-    profile.home_lng = body.home_lng
+    ProfileRepository(db).upsert_medical(
+        user.id,
+        blood_group=body.blood_group,
+        allergies=body.allergies,
+        conditions=body.conditions,
+        medications=body.medications,
+        emergency_notes=body.emergency_notes,
+        preferred_hospital=body.preferred_hospital,
+        home_lat=body.home_lat,
+        home_lng=body.home_lng,
+    )
     db.commit()
     log_user_action(db, user.id, "medical.updated", commit=False)
     db.commit()
@@ -111,7 +105,7 @@ def update_medical(
 
 # ------------------------------------------------------------------ contacts
 @router.get("/contacts", response_model=list[EmergencyContactOut])
-def list_contacts(user: User = Depends(get_current_user)):
+def list_contacts(user: User = Depends(require_permission("manage_own_profile"))):
     return user.contacts
 
 
@@ -119,16 +113,15 @@ def list_contacts(user: User = Depends(get_current_user)):
 def add_contact(
     body: EmergencyContactIn,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("manage_own_profile")),
     db: Session = Depends(get_db),
 ):
-    if len(user.contacts) >= 10:
+    repo = ProfileRepository(db)
+    if repo.count_contacts(user.id) >= MAX_CONTACTS:
         raise HTTPException(status_code=400, detail="Maximum of 10 emergency contacts")
     if body.is_primary:
-        for c in user.contacts:
-            c.is_primary = False
-    contact = EmergencyContact(user_id=user.id, **body.model_dump())
-    db.add(contact)
+        repo.clear_primary_contacts(user.id)
+    contact = repo.add_contact(user.id, **body.model_dump())
     db.commit()
     db.refresh(contact)
     log_user_action(db, user.id, "contact.added", resource_id=contact.id, commit=False)
@@ -141,19 +134,15 @@ def update_contact(
     contact_id: str,
     body: EmergencyContactIn,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("manage_own_profile")),
     db: Session = Depends(get_db),
 ):
-    contact = (
-        db.query(EmergencyContact)
-        .filter(EmergencyContact.id == contact_id, EmergencyContact.user_id == user.id)
-        .first()
-    )
+    repo = ProfileRepository(db)
+    contact = repo.contact(user.id, contact_id)
     if contact is None:
         raise HTTPException(status_code=404, detail="Contact not found")
     if body.is_primary:
-        for c in user.contacts:
-            c.is_primary = False
+        repo.clear_primary_contacts(user.id)
     for key, value in body.model_dump().items():
         setattr(contact, key, value)
     db.commit()
@@ -166,17 +155,14 @@ def update_contact(
 def delete_contact(
     contact_id: str,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("manage_own_profile")),
     db: Session = Depends(get_db),
 ):
-    contact = (
-        db.query(EmergencyContact)
-        .filter(EmergencyContact.id == contact_id, EmergencyContact.user_id == user.id)
-        .first()
-    )
+    repo = ProfileRepository(db)
+    contact = repo.contact(user.id, contact_id)
     if contact is None:
         raise HTTPException(status_code=404, detail="Contact not found")
-    db.delete(contact)
+    repo.delete(contact)
     db.commit()
     log_user_action(db, user.id, "contact.deleted", resource_id=contact_id, commit=False)
     db.commit()
@@ -184,7 +170,7 @@ def delete_contact(
 
 # ------------------------------------------------------------------ features
 @router.get("/features", response_model=list[VisibleFeatureOut])
-def list_features(user: User = Depends(get_current_user)):
+def list_features(user: User = Depends(require_permission("manage_own_profile"))):
     return user.visible_features
 
 
@@ -192,11 +178,10 @@ def list_features(user: User = Depends(get_current_user)):
 def add_feature(
     body: VisibleFeatureIn,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("manage_own_profile")),
     db: Session = Depends(get_db),
 ):
-    feature = VisibleFeature(user_id=user.id, **body.model_dump())
-    db.add(feature)
+    feature = ProfileRepository(db).add_feature(user.id, **body.model_dump())
     db.commit()
     db.refresh(feature)
     return feature
@@ -206,23 +191,20 @@ def add_feature(
 def delete_feature(
     feature_id: str,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("manage_own_profile")),
     db: Session = Depends(get_db),
 ):
-    feature = (
-        db.query(VisibleFeature)
-        .filter(VisibleFeature.id == feature_id, VisibleFeature.user_id == user.id)
-        .first()
-    )
+    repo = ProfileRepository(db)
+    feature = repo.feature(user.id, feature_id)
     if feature is None:
         raise HTTPException(status_code=404, detail="Feature not found")
-    db.delete(feature)
+    repo.delete(feature)
     db.commit()
 
 
 # ------------------------------------------------------------------ consents
 @router.get("/consents", response_model=list[ConsentOut])
-def list_consents(user: User = Depends(get_current_user)):
+def list_consents(user: User = Depends(require_permission("manage_own_consent"))):
     return user.consents
 
 
@@ -230,24 +212,19 @@ def list_consents(user: User = Depends(get_current_user)):
 def set_consent(
     body: ConsentIn,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("manage_own_consent")),
     db: Session = Depends(get_db),
 ):
-    existing = (
-        db.query(Consent)
-        .filter(Consent.user_id == user.id, Consent.consent_type == body.consent_type)
-        .order_by(Consent.granted_at.desc())
-        .first()
-    )
+    repo = ProfileRepository(db)
+    existing = repo.latest_consent(user.id, body.consent_type)
     if existing and existing.status == ("active" if body.granted else "withdrawn"):
         return existing
-    consent = Consent(
-        user_id=user.id,
+    consent = repo.add_consent(
+        user.id,
         consent_type=body.consent_type,
         status="active" if body.granted else "withdrawn",
         version=body.version,
     )
-    db.add(consent)
     db.commit()
     db.refresh(consent)
     log_user_action(
@@ -264,7 +241,7 @@ def set_consent(
 
 # ------------------------------------------------------------------ biometric
 @router.get("/biometric-status", response_model=BiometricStatusOut)
-def biometric_status(user: User = Depends(get_current_user)):
+def biometric_status(user: User = Depends(require_permission("enroll_biometric"))):
     profile = user.biometric_profile
     if profile is None:
         return BiometricStatusOut(status="not_enrolled")
@@ -279,10 +256,10 @@ def biometric_status(user: User = Depends(get_current_user)):
 @router.delete("/biometric", status_code=status.HTTP_204_NO_CONTENT)
 def delete_biometric(
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("enroll_biometric")),
     db: Session = Depends(get_db),
 ):
-    profile = user.biometric_profile
+    profile = ProfileRepository(db).biometric(user.id)
     if profile:
         db.delete(profile)
         db.commit()
@@ -295,7 +272,7 @@ def delete_biometric(
 def delete_account(
     body: DeleteAccountRequest,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("manage_own_profile")),
     db: Session = Depends(get_db),
 ):
     if not verify_password(body.password, user.hashed_password):
@@ -315,13 +292,7 @@ def access_history(
     db: Session = Depends(get_db),
 ):
     limit = max(1, min(limit, 200))
-    rows = (
-        db.query(AuditLog)
-        .filter(AuditLog.actor_type == "user", AuditLog.actor_id == user.id)
-        .order_by(AuditLog.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    rows = AuditRepository(db).actor_actions(user.id, limit=limit)
     return [
         TimelineEventOut(at=r.created_at, action=r.action, details=r.details) for r in rows
     ]
@@ -330,13 +301,7 @@ def access_history(
 # ------------------------------------------------------------------ notifications
 @router.get("/notifications", response_model=list[dict])
 def list_notifications(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    rows = (
-        db.query(Notification)
-        .filter(Notification.user_id == user.id)
-        .order_by(Notification.created_at.desc())
-        .limit(30)
-        .all()
-    )
+    rows = NotificationRepository(db).recent(user.id, limit=30)
     return [
         {
             "id": n.id,

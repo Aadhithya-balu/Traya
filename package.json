@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev:all": "node scripts/dev-all.mjs"
+    "dev:all": "node scripts/dev-all.mjs",
+    "docs:check": "node scripts/check-docs.mjs",
+    "verify": "node scripts/check-docs.mjs"
   }
 }

@@ -6,6 +6,7 @@ export interface UserSummary {
   date_of_birth?: string | null;
   is_active: boolean;
   roles: string[];
+  permissions?: string[];
   created_at?: string | null;
 }
 
@@ -24,6 +25,7 @@ export interface Quality {
   lighting_score: number;
   usable_for_matching: boolean;
   reasons: string[];
+  reason_codes?: string[];
 }
 
 export interface Candidate {
@@ -38,14 +40,17 @@ export interface IdentifyResult {
   session_id: string;
   status: string;
   human_readable: string;
-  confidence?: number | null;
+  confidence: number | null;
   candidates: Candidate[];
   method: string[];
   fallback_used: boolean;
   requires_human_confirmation: boolean;
   medical_alerts_available: boolean;
-  quality?: Quality | null;
+  quality: Quality | null;
   face_count: number;
+  /** "simulation" means the demo engine, which is not a production biometric. */
+  engine_mode?: string;
+  demo_mode?: boolean;
 }
 
 export interface CaptureOut {
@@ -58,6 +63,7 @@ export interface CaptureOut {
   face_count: number;
   usable_for_matching: boolean;
   reasons: string[];
+  reason_codes?: string[];
 }
 
 export interface SessionStatus {

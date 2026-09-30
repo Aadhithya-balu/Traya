@@ -1,33 +1,122 @@
 /** @type {import('tailwindcss').Config} */
+
+// TRAYA is deliberately monochrome. The only hues in the interface are the
+// three that carry meaning: red for danger/stop, amber for caution, and a
+// single desaturated accent for interactive affordances. Everything else is
+// a neutral on a light-to-dark ramp, so identity and status read without
+// decoration. Colours are emitted as CSS custom properties (see index.css) so
+// light and dark share one set of class names.
+const ramp = {
+  canvas: "var(--c-canvas)",
+  surface: "var(--c-surface)",
+  raised: "var(--c-raised)",
+  line: "var(--c-line)",
+  "line-strong": "var(--c-line-strong)",
+  text: "var(--c-text)",
+  muted: "var(--c-muted)",
+  faint: "var(--c-faint)",
+  accent: "var(--c-accent)",
+  "accent-text": "var(--c-accent-text)",
+  "accent-fg": "var(--c-accent-fg)",
+  danger: "var(--c-danger)",
+  "danger-fg": "var(--c-danger-fg)",
+  warn: "var(--c-warn)",
+  "warn-fg": "var(--c-warn-fg)",
+  ok: "var(--c-ok)",
+  "ok-fg": "var(--c-ok-fg)",
+};
+
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  darkMode: "class",
   theme: {
+    // Spacing is replaced rather than extended: the default 0.25rem steps make
+    // it far too easy to ship a cramped layout on a 360px screen.
+    spacing: {
+      0: "0px",
+      px: "1px",
+      0.5: "0.125rem",
+      1: "0.25rem",
+      1.5: "0.375rem",
+      2: "0.5rem",
+      2.5: "0.625rem",
+      3: "0.75rem",
+      3.5: "0.875rem",
+      4: "1rem",
+      5: "1.25rem",
+      6: "1.5rem",
+      7: "1.75rem",
+      8: "2rem",
+      9: "2.25rem",
+      10: "2.5rem",
+      11: "2.75rem",
+      12: "3rem",
+      14: "3.5rem",
+      16: "4rem",
+      20: "5rem",
+      24: "6rem",
+      32: "8rem",
+      40: "10rem",
+      48: "12rem",
+      56: "14rem",
+      64: "16rem",
+      full: "100%",
+    },
     extend: {
-      colors: {
-        ink: {
-          950: "#070c16",
-          900: "#0b1220",
-          800: "#111a2e",
-          700: "#1a2740",
-        },
-        accent: {
-          400: "#2dd4bf",
-          500: "#14b8a6",
-          600: "#0d9488",
-        },
-        danger: {
-          400: "#f87171",
-          500: "#ef4444",
-          600: "#dc2626",
-        },
-        warn: {
-          400: "#fbbf24",
-          500: "#f59e0b",
-        },
+      colors: ramp,
+      // Minimum comfortable touch target. Anything interactive should be at
+      // least this tall on both axes.
+      minHeight: {
+        touch: "2.75rem",
+        "touch-lg": "3rem",
+      },
+      minWidth: {
+        touch: "2.75rem",
+      },
+      borderRadius: {
+        sm: "0.375rem",
+        DEFAULT: "0.5rem",
+        md: "0.625rem",
+        lg: "0.75rem",
+        xl: "1rem",
+        "2xl": "1.25rem",
+        full: "9999px",
       },
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
+        sans: ["Inter", "system-ui", "-apple-system", "Segoe UI", "Roboto", "sans-serif"],
         mono: ["ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"],
+      },
+      fontSize: {
+        xs: ["0.75rem", { lineHeight: "1rem" }],
+        sm: ["0.875rem", { lineHeight: "1.25rem" }],
+        base: ["1rem", { lineHeight: "1.5rem" }],
+        lg: ["1.125rem", { lineHeight: "1.75rem" }],
+        xl: ["1.25rem", { lineHeight: "1.75rem" }],
+        "2xl": ["1.5rem", { lineHeight: "2rem" }],
+        "3xl": ["1.875rem", { lineHeight: "2.25rem" }],
+        "4xl": ["2.25rem", { lineHeight: "2.5rem" }],
+      },
+      transitionDuration: {
+        150: "150ms",
+      },
+      keyframes: {
+        "sheet-in": {
+          from: { transform: "translateY(100%)" },
+          to: { transform: "translateY(0)" },
+        },
+        "fade-in": {
+          from: { opacity: "0" },
+          to: { opacity: "1" },
+        },
+        "rise": {
+          from: { opacity: "0", transform: "translateY(6px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+      },
+      animation: {
+        "sheet-in": "sheet-in 220ms cubic-bezier(0.32, 0.72, 0, 1)",
+        "fade-in": "fade-in 160ms ease-out",
+        rise: "rise 200ms cubic-bezier(0.32, 0.72, 0, 1)",
       },
     },
   },
