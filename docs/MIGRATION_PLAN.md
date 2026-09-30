@@ -46,12 +46,12 @@ phase 1 fixes the thing that makes the product not work at all.
 Phase 3 runs on its own track because Supabase setup is waiting on a project URL
 and keys. It can proceed while phase 1 is in review.
 
-**Phase 3 status: partially done, blocked on credentials.** The infrastructure
-free part is complete — `backend/.env` exists with the four `SUPABASE_*` values
-and the `DATABASE_URL` line to change, the `.env` path bug that made every one
-of those settings inert is fixed, and step 6 (the silent SQLite fallback) is
-finished and tested. Steps 1, 4, 5, 7 and the schema/data gate items need a
-real project. See the outcome section at the end of this phase.
+**Phase 3 status: infrastructure verified on real Postgres, host blocked.** The
+schema, the connection, the no-drift check and the fail-loud guarantee are all
+proven against a live Postgres 16 with `pgvector` — including the full 207-test
+suite. What remains needs a Supabase account: the project itself, Storage
+buckets, and the hosted data migration. See the outcome section at the end of
+this phase for the exact commands.
 
 ## Phase 1 - Unblock the emergency flow
 
@@ -278,46 +278,118 @@ Demo accounts are re-seeded. No real user data is lost, because none exists.
 deleted; the migration is a separate SQL script, not an Alembic rewrite; and the
 row-count verification is a gate, not a suggestion.
 
-### Outcome - partially done, blocked on credentials
+### Outcome - infrastructure verified on real Postgres, host still blocked
 
-**Done and verified:**
+Supabase is Postgres with `pgvector` and a Storage API. A local
+`pgvector/pgvector:pg16` container is close enough to prove the parts that were
+previously unprovable: SQLite has no `vector` extension, no row-level security,
+and different behaviour on some type comparisons, so **every "Postgres works"
+claim made before this point was untested**.
+
+**Done and verified against real Postgres 16.15:**
+
+| Item | Result |
+|---|---|
+| `DATABASE_ALLOW_FALLBACK` defaults off, refused in production | Complete. |
+| All 4 Alembic migrations apply to Postgres | `EXITCODE=0`, 22 tables created. |
+| `alembic check` reports no drift on Postgres | `EXITCODE=0`, "No new upgrade operations detected." |
+| `psycopg` connects, `/api/health` resolves | `backend=postgres`, `dialect=postgresql`, `connect=True`, 22 tables. |
+| **Full test suite on Postgres** | **207 passed** — same 207 as SQLite, over **three consecutive runs**. |
+| Full test suite on SQLite, unchanged | **207 passed.** |
+| Dead primary fails to start | `EXITCODE=1`, `ConnectionTimeout`. Did not fall back. |
+| `/api/health` survives a database killed mid-flight | `HTTP 200`, `state=disconnected`, `connect=False`, URL masked. |
+| `pgvector` + `pgcrypto` install and are visible to `psycopg` | Both created, `pg_extension` lists them. |
+
+Commands, so none of this is taken on trust. Both migration commands exited 0;
+the suite reported 207 passed; the final boot exited 1.
+
+```powershell
+docker run -d --name traya-pg -p 54329:5432 `
+  -e POSTGRES_PASSWORD=traya_local_dev -e POSTGRES_USER=postgres `
+  -e POSTGRES_DB=traya pgvector/pgvector:pg16
+
+cd backend
+$env:DATABASE_URL="postgresql+psycopg://postgres:traya_local_dev@127.0.0.1:54329/traya"
+.venv\Scripts\python.exe -m alembic upgrade head
+.venv\Scripts\python.exe -m alembic check
+
+$env:TRAYA_TEST_DATABASE_URL="postgresql+psycopg://postgres:traya_local_dev@127.0.0.1:54329/traya_test"
+.venv\Scripts\python.exe -m pytest
+Remove-Item Env:\TRAYA_TEST_DATABASE_URL
+
+docker stop traya-pg
+.venv\Scripts\python.exe -c "import app.main"
+```
+
+`TRAYA_TEST_DATABASE_URL` is a `conftest.py` addition. Unset, the suite runs
+on a temp SQLite file exactly as it always did.
+
+**Still blocked, and genuinely so:** step 1 (create the project), the Storage
+buckets (step 5) and the hosted-project data migration (step 7) need a Supabase
+account. `SUPABASE_URL` and the two keys are credentials — they cannot be
+derived, guessed or generated. Everything else in this phase is done.
 
 | Step | State |
 |---|---|
-| Record the four `SUPABASE_*` values | `backend/.env` created with the four slots and the `DATABASE_URL` line to change. Awaiting values. |
-| 6. Fallback is explicit, opt-in, defaults off | **Complete.** `DATABASE_ALLOW_FALLBACK` defaults to `False`; `DEMO_MODE=false` refuses it regardless. Degraded path logs at `ERROR`. |
-| 2. Install `supabase` and `pgvector` | Not started. `psycopg` 3.3.4 is already present and is what the app connects with; the SDK is only needed for Phase 11. |
+| 1. Record the four `SUPABASE_*` values | Slots ready in `backend/.env`, empty. Needs the account. |
+| 2. Install `supabase` / `pgvector` | `psycopg` 3.3.4 present; `vector` verified working in Postgres. The Supabase SDK is only needed for Phase 11. |
+| 3. Write `migrations/supabase/*.sql` | Not written. Deliberate — see below. |
+| 4. Enable `pgcrypto` + `vector` | **Verified working** on Postgres 16. Statement still needed for the hosted project. |
+| 5. Storage buckets | Blocked on a project. |
+| 6. Explicit opt-in fallback | **Complete.** |
+| 7. Data migration + row-count verification | Blocked on a project. |
 
-**Not started, and why:** steps 1, 3, 4, 5 and 7 all require a real Supabase
-project. The schema SQL, the `pgcrypto`/`vector` extensions and the Storage
-buckets cannot be written blind — a migration set nobody has applied is a guess
-dressed as an asset, which is the failure mode `AGENTS.md` §8 warns about.
+**Step 3 is still not written, and that is a judgement worth stating.** The
+entity mapping renames 19 tables and rewrites the embeddings column to
+`vector(320)`. Writing it blind produces a migration set that has never been
+applied — the "aspirational doc is worse than no doc" failure. It becomes
+writable the moment there is a project to apply it to.
 
 **Gate status:**
 
 | Gate item | State |
 |---|---|
-| Unreachable primary fails to start | **Pass.** `tests/test_database_fallback.py` — fails with the flag off, fails in production mode even with the flag on, and still works when explicitly opted in, so it is a real branch and not a permanently-dead one. |
-| Schema applies cleanly | Blocked on a project |
-| `psycopg` connects, queries work | Blocked on a project |
-| Data migration verified | Blocked on a project |
-| `alembic check` no drift | Blocked on a project |
+| Schema applies cleanly | **Pass on Postgres 16** via Alembic. Not yet on Supabase. |
+| `psycopg` connects, queries work | **Pass.** 207 tests on Postgres. |
+| Data migration verified: counts + spot-checks | Blocked on a project. |
+| Dead primary fails to start | **Pass, proven by stopping the container.** |
+| `alembic check` no drift | **Pass on Postgres** (`EXITCODE=0`). |
 
-**Two defects found while doing step 6, neither on the plan's list:**
+**Three defects found by running it, none on the plan's list:**
 
-- **`/api/health` 500'd in exactly the case it exists to report.** Resolution
-  was outside the never-raise guard, so with the fallback off and a dead
-  primary, `initialize()` raised inside `health()`. Monitoring would see a
-  failing endpoint rather than a failed database — a monitor that fires once
-  and goes quiet instead of one that pages. Resolution is now inside the guard
-  and returns `connect: false` with `reason: "unresolved"`.
-- **The plan's step 6 said "defaults off" but did not mention that
-  `DEMO_MODE=false` should also refuse it.** A permissive flag is still
-  reachable by env var on a production deployment, which is one `kubectl edit`
-  away from re-authorising exactly the loss the change exists to prevent. Two
-  independent conditions, both tested as a matrix.
+- **`/api/health` could not answer the question it exists to answer.**
+  Resolution sat outside the never-raise guard. With the fallback off — the safe
+  configuration created moments earlier — `initialize()` raised inside
+  `health()`, so the endpoint designed to report a failed database returned
+  500. Resolution is now inside the guard.
+- **A dead primary at *boot* never reaches `/api/health` at all.**
+  `session.py:14` calls `db_service.initialize()` at module level, so the
+  process dies during import. That is the correct outcome for a dead primary
+  (fail fast) but it means health's "unresolved" branch is only reachable for a
+  database that dies *after* startup — which is why the test above kills the
+  container mid-flight rather than before boot. Worth knowing before anyone
+  relies on health to diagnose a boot-time outage: the evidence is the crash,
+  not the endpoint.
+- **The Postgres test mode I added passed once and then failed.** SQLite starts
+  clean because the file is deleted; Postgres does not, so the second run hit
+  `409 duplicate email` on four tests. I reported "207 passed on Postgres" from
+  the first run before checking that it was repeatable. `conftest.py` now drops
+  and recreates the `public` schema in that mode, verified over three
+  consecutive runs. The generalisable point: **a single green run of a suite
+  that manages its own state is not evidence the state management works.**
+- **The plan's step 6 said "defaults off" and nothing about `DEMO_MODE`.** A
+  permissive flag is still reachable by env var in production, one `kubectl edit`
+  from re-authorising the loss. Two independent conditions, tested as a matrix.
 
-The `.env` path defect and the embedding-key hazard are written up in
+**A measurement worth carrying into Phase 4, not a claim about it.** With zero
+RLS policies (`rowsecurity` true on 0 of 22 tables) and a plain
+`GRANT SELECT`, a browser-facing role could read **all 9 `users` rows, all 12
+`biometric_embeddings` rows and every `audit_logs` row**. Phase 4's "three
+policies that matter" are not defence-in-depth polish against a theoretical
+reader; without them the anon key is a full data export. The role used for the
+measurement was dropped immediately afterwards.
+
+The `.env` path defect and the embedding-key hazard are in
 [AUDIT.md](AUDIT.md#phase-3-opening-the-env-file-had-never-been-read).
 
 ## Phase 4 - Row Level Security
@@ -340,6 +412,17 @@ is untestable.
 1. **No client policy grants direct read of `face_embeddings`.**
 2. **Responder clinical access requires an active incident**, not just a role.
 3. **Users cannot read their own vectors.**
+
+**Measured, not assumed.** In Phase 3, against real Postgres 16 with the schema
+applied, `pg_tables` reported `rowsecurity` true on **0 of 22 tables**. With a
+plain `GRANT SELECT` and no policies, a browser-facing role could read all 9
+`users` rows, all 12 `biometric_embeddings` rows, and every `audit_logs` row.
+The measurement role was dropped immediately afterwards.
+
+So these are not hardening. Without them the anon key is a complete data export,
+and Phase 4 is the phase where Python-only authorization stops being the only
+thing standing between a public JWT and the medical record. The gate below should
+be read as the first real barrier, not the last one.
 
 ### Gate
 

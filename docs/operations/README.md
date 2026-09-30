@@ -144,7 +144,7 @@ recogniser; it only makes the code path look real. See
 cd backend; .venv\Scripts\python.exe -m pytest
 ```
 
-130 tests pass, with 8 `StarletteDeprecationWarning`s from
+207 tests pass, with 8 `StarletteDeprecationWarning`s from
 `HTTP_422_UNPROCESSABLE_ENTITY`.
 
 `pytest.ini` sets `addopts = -q`, so **passing another `-q` yields `-qq` and
@@ -160,6 +160,37 @@ very top of the file, before any `app` import**, because pydantic reads the
 environment at import time. Moving an import above those assignments silently
 runs the whole suite against the developer's real database. The suite uses a
 fresh temp SQLite file at `%TEMP%\traya_test.db`, removed per run.
+
+### Running the suite against real Postgres
+
+SQLite cannot falsify a Postgres claim. It has no `vector` extension, no
+row-level security, and differs on some type comparisons, so a green SQLite run
+says nothing about the production target. Set `TRAYA_TEST_DATABASE_URL` and the
+whole suite runs on Postgres instead:
+
+```powershell
+docker run -d --name traya-pg -p 54329:5432 `
+  -e POSTGRES_PASSWORD=traya_local_dev -e POSTGRES_USER=postgres `
+  -e POSTGRES_DB=traya pgvector/pgvector:pg16
+
+cd backend
+$env:TRAYA_TEST_DATABASE_URL="postgresql+psycopg://postgres:traya_local_dev@127.0.0.1:54329/traya_test"
+.venv\Scripts\python.exe -m pytest
+Remove-Item Env:\TRAYA_TEST_DATABASE_URL
+```
+
+The database must exist but be disposable. In this mode `conftest.py` drops and
+recreates the `public` schema before importing the app, so the run starts clean.
+That step is not optional decoration: SQLite gets a clean slate for free by
+deleting a file, Postgres does not, and without the reset the suite **passes
+once and then fails** with `409 duplicate email` on every subsequent run. A green
+first run is not evidence of an idempotent suite. Unset the variable and nothing
+changes.
+
+All 207 tests pass on both, verified in Phase 3 — and on Postgres that was
+confirmed across three consecutive runs, not one. The equality is the useful
+result: the schema stays genuinely portable, which is what lets the SQLite
+rollback path exist at all.
 
 There is **no frontend test runner.** No component test, no hook test, no
 snapshot. Every frontend change is currently verified only by `tsc` and by

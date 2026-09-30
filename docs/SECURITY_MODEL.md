@@ -18,7 +18,7 @@ yet. Implementation-level detail lives in
 | Permission matrix | **Real.** 7 roles, 18 permissions, seeded and auditable |
 | Audit trail | **Real.** Append-only, written with domain writes |
 | Embeddings never leave the backend | **Real.** No endpoint returns a vector |
-| **Row Level Security** | **Absent.** Python-only authorization |
+| **Row Level Security** | **Absent, and measured.** Python-only authorization |
 | **Session storage** | **`localStorage`.** Vulnerable to XSS and extensions |
 | **Content Security Policy** | **Absent** |
 | **Silent database fallback** | **Closed in Phase 3.** Opt-in, off by default, refused in production mode |
@@ -26,6 +26,19 @@ yet. Implementation-level detail lives in
 
 The gap is not the cryptography. It is **who decides access**: the application
 does, and the database will happily serve anyone who reaches it.
+
+**That last sentence is a measurement, not a rhetorical flourish.** In Phase 3,
+against a real Postgres 16 with the full schema applied, `pg_tables` reported
+`rowsecurity` enabled on **0 of 22 tables**. Creating a browser-facing role and
+granting plain `SELECT` made every row of `users`, `biometric_embeddings` and
+`audit_logs` readable without passing a single application check. The role was
+dropped immediately afterwards; the finding was not left in place to be
+discovered by somebody else.
+
+So until Phase 4 lands, the service-role key must never reach a browser, and the
+anon key must be treated as a full read of anything it is granted. The Python
+permission matrix is real work, but it is the only layer, and a JWT is not a
+wall.
 
 ## Trust boundaries
 

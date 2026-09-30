@@ -95,6 +95,7 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 | Fact | Value |
 |---|---|
 | Backend tests | **189 passed** at commit `497e7af`. **207 passed** after Phase 3, ~40s, exit 0 |
+| Backend tests on real Postgres | **207 passed**, same count. `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
 | Frontend typecheck | **passes**, exit 0, strict TS |
 | `npm run docs:check` | **passes**, 29 pages |
 | Endpoints | **47** across 7 routers |
@@ -263,6 +264,8 @@ Run from the repo root unless noted.
 | Frontend only | `cd frontend; npm run dev` (http://localhost:5173) |
 | Frontend typecheck | `cd frontend; npm run typecheck` |
 | Frontend build | `cd frontend; npm run build` |
+| Backend tests on Postgres | `cd backend; $env:TRAYA_TEST_DATABASE_URL="postgresql+psycopg://postgres:traya_local_dev@127.0.0.1:54329/traya_test"; .venv\Scripts\python.exe -m pytest` |
+| Local Postgres (pgvector) | `docker run -d --name traya-pg -p 54329:5432 -e POSTGRES_PASSWORD=traya_local_dev -e POSTGRES_USER=postgres -e POSTGRES_DB=traya pgvector/pgvector:pg16` |
 | Migrate to head | `cd backend; .venv\Scripts\python.exe -m alembic upgrade head` |
 | Migration drift | `cd backend; .venv\Scripts\python.exe -m alembic upgrade head; .venv\Scripts\python.exe -m alembic check` |
 | New migration | `cd backend; .venv\Scripts\python.exe -m alembic revision --autogenerate -m "..."` |

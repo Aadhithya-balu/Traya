@@ -2,6 +2,23 @@
 
 IMPORTANT: environment variables must be set BEFORE any ``app`` module is
 imported, because the pydantic settings singleton is created at import time.
+
+Set ``TRAYA_TEST_DATABASE_URL`` to run the whole suite against a real Postgres
+instead of SQLite. It exists because SQLite cannot falsify a Postgres claim:
+it has no ``vector`` extension, no row-level security, and a different
+behaviour for a handful of type comparisons. Phase 3 is the phase where that
+difference starts to matter, so the gate items are checked against Postgres:
+
+    docker run -d --name traya-pg -p 54329:5432 \\
+      -e POSTGRES_PASSWORD=traya_local_dev -e POSTGRES_USER=postgres \\
+      -e POSTGRES_DB=traya pgvector/pgvector:pg16
+
+    cd backend
+    $env:TRAYA_TEST_DATABASE_URL="postgresql+psycopg://postgres:traya_local_dev@127.0.0.1:54329/traya_test"
+    .venv\\Scripts\\python.exe -m pytest
+
+The database must exist but be disposable — the suite creates and drops its own
+schema. Leave it unset and everything runs on a temp SQLite file as before.
 """
 from __future__ import annotations
 
@@ -10,13 +27,31 @@ import os
 import tempfile
 import uuid
 
+_TEST_PG_URL = os.environ.get("TRAYA_TEST_DATABASE_URL", "")
+
 _TEST_DB = os.path.join(tempfile.gettempdir(), "traya_test.db")
-if os.path.exists(_TEST_DB):
+
+if _TEST_PG_URL:
+    # SQLite gets a clean slate for free: the file is deleted, so the next run
+    # starts from nothing. Postgres has no equivalent, and skipping the reset
+    # makes the suite fail on the *second* run against the same database with
+    # `409 duplicate email` — a green first run hiding a suite that only works
+    # once. Drop the schema before any app import, so the first table created
+    # lands in a clean database.
+    import psycopg
+
+    # SQLAlchemy's `+psycopg` is a dialect name, not a libpq driver name.
+    # psycopg.connect() parses the string itself and chokes on it.
+    _pg_url = _TEST_PG_URL.replace("postgresql+psycopg://", "postgresql://", 1)
+    with psycopg.connect(_pg_url, autocommit=True) as _pg:
+        _pg.execute("DROP SCHEMA public CASCADE")
+        _pg.execute("CREATE SCHEMA public")
+elif os.path.exists(_TEST_DB):
     os.remove(_TEST_DB)
 
 os.environ["TESTING"] = "1"
 os.environ["DEMO_MODE"] = "1"
-os.environ["DATABASE_URL"] = "sqlite:///" + _TEST_DB.replace("\\", "/")
+os.environ["DATABASE_URL"] = _TEST_PG_URL or "sqlite:///" + _TEST_DB.replace("\\", "/")
 
 import pytest
 from fastapi.testclient import TestClient
