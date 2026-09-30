@@ -43,7 +43,7 @@ export function Tabs<T extends string>({
             aria-selected={selected}
             onClick={() => onChange(tab.id)}
             className={[
-              "relative shrink-0 px-3 py-3 text-sm font-medium transition-colors duration-150",
+              "tap relative shrink-0 px-3 py-3 text-sm font-medium transition-colors duration-150",
               selected ? "text-text" : "text-muted",
             ].join(" ")}
           >
@@ -89,7 +89,7 @@ export function ListRow({
   );
 
   const className =
-    "flex w-full items-center gap-3 rounded-md px-3 py-3 text-left transition-colors duration-150 hover:bg-raised";
+    "tap flex w-full items-center gap-3 rounded-md px-3 py-3 text-left transition-colors duration-150 hover:bg-raised";
 
   if (to) {
     return (

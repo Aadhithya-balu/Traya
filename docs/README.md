@@ -147,3 +147,14 @@ Match Result tab, Logout being reachable during an emergency, the
 `<alpha-value>` bug that made every opacity modifier a no-op, and the six files
 still on the removed palette. See the
 [Phase 1 outcome](AUDIT.md#phase-1-outcome-the-emergency-flow-was-broken-end-to-end).
+
+**Closed in Phase 2**: `.tap` was purged because no component referenced it, the
+app bar and tab bar were translucent, five colour tokens sat below 4.5:1 — two of
+them only on their own badge tint — and the camera-error bar used `text-text` on
+`bg-danger/90` at 3.18:1. Contrast is now asserted by
+`backend/tests/test_contrast.py` rather than eyeballed. See the
+[design system](frontend/design-system.md#contrast-is-measured-against-the-background-that-actually-renders).
+
+**Still open, and not fixed by either phase**: the five legacy pages hardcode
+English, and `SimulationNotice` is still dead code next to the `EngineDisclosure`
+that replaced its job inline.

@@ -94,9 +94,17 @@ export function Layout() {
       </main>
 
       {!onEmergencyFlow && (
+        /* Opaque, not /95. At 95% the content underneath is faintly legible as
+           it scrolls past, which on a result screen is exactly the wrong thing
+           to see. A background blur also costs a compositing layer on every
+           frame for no benefit once the background is solid.
+
+           Note: the class name is deliberately not written in this comment.
+           Tailwind's content scanner does not strip comments, so mentioning a
+           utility here emits it into the stylesheet. */
         <nav
           aria-label={t("nav.menu")}
-          className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 backdrop-blur pb-safe"
+          className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface pb-safe"
         >
           <div className="mx-auto flex max-w-2xl items-stretch">
             {visibleTabs.map((tab) => (
@@ -142,7 +150,10 @@ export function Layout() {
                   onClick={() => setLocale(code as Locale)}
                   aria-pressed={locale === code}
                   className={[
-                    "rounded px-2.5 py-1.5 text-xs font-medium transition-colors",
+                    // The pill stays 28px tall; `tap` grows the hit area to 44px
+                    // and the negative margin takes the difference back out so
+                    // the segmented control does not get taller.
+                    "tap -my-2 rounded px-2.5 py-1.5 text-xs font-medium transition-colors",
                     locale === code
                       ? "bg-accent text-accent-fg"
                       : "text-muted",
@@ -163,7 +174,7 @@ export function Layout() {
               type="button"
               onClick={toggleTheme}
               aria-label={t("a11y.theme")}
-              className="relative h-7 w-12 rounded-full bg-raised transition-colors"
+              className="tap -my-2 relative h-7 w-12 rounded-full bg-raised transition-colors"
             >
               <span
                 className={[
@@ -209,7 +220,7 @@ function AppBar({
   const { isAuthed } = useAuth();
 
   return (
-    <header className="sticky top-0 z-30 border-b border-line bg-canvas/90 backdrop-blur">
+    <header className="sticky top-0 z-30 border-b border-line bg-canvas">
       <div className="h-appbar pt-safe" />
       <div className="mx-auto flex h-14 max-w-2xl items-center justify-between px-4">
         <Link to="/" className="flex items-center gap-2">
@@ -278,7 +289,9 @@ function TabButton({
 
 function tabClasses(isActive: boolean) {
   return [
-    "flex flex-1 flex-col items-center justify-center gap-1 py-2 transition-colors duration-150",
+    // `tap` is load-bearing, not decoration. These are the most-tapped controls
+    // in the app and `py-2` alone gave 41px, one pixel under the 44px floor.
+    "tap flex flex-1 flex-col items-center justify-center gap-1 py-2 transition-colors duration-150",
     isActive ? "text-text" : "text-faint",
   ].join(" ");
 }

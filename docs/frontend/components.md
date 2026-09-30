@@ -56,12 +56,23 @@ is a mistake waiting to happen. Asserted by
 Defects:
 
 - `TabButton` accepts a `to?: string` prop that is never used; `Layout` passes
-  `to=""`. Dead prop - remove it.
+  `to=""`. Dead prop - remove it. The only remaining defect here.
 - ~~The theme toggle knob never moves.~~ **Fixed in Phase 1.** It used
   `-translate-x-5.5`, which is not in the replaced `theme.spacing` table, so the
   class compiled to nothing and only the icon changed. It is now positioned from
   `left-0.5 top-0.5` and travels `translate-x-0` to `translate-x-6`, which is
   the exact width of a `w-6` knob inside a `w-12` track.
+
+**Both fixed bars are now opaque, and `.tap` reaches five controls here.**
+Phase 2: the app bar was `bg-canvas/90` and the tab bar `bg-surface/95`, both
+with `backdrop-blur`, so content scrolled legibly under them and a blur sat
+behind a colour that was nearly solid. They are `bg-canvas` and `bg-surface` now
+with the blur removed — `test_no_backdrop_blur_without_a_solid_background` fails
+if either returns. `tabClasses` carries `tap`, because `py-2` gave 41px, one
+under the floor, and these are the most-tapped controls in the app. The language
+pills and the theme toggle carry `tap -my-2`: 44px of hit area around a 28px
+control.
+  Unchanged, and now the only defect on this component.
 
 ## Guards
 
@@ -123,6 +134,10 @@ type if you want that to be a compile error.
 `ListRow` is used only by `Layout`. `React.ReactNode` is referenced without
 importing `React`; it compiles today via the UMD global from `@types/react`,
 which is fragile. Prefer `import type { ReactNode } from "react"`.
+
+`ListRow` and the `Tabs` strip both gained `tap` in Phase 2 — they were
+`py-3 text-sm` and `py-3 text-sm` with no minimum, so a two-word row measured
+under 44px.
 
 ## StatusBadge
 

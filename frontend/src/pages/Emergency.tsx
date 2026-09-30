@@ -174,7 +174,13 @@ export function Emergency() {
               <div className="h-2/5 w-2/5 rounded-[50%] border-2 border-dashed border-white/60" />
             </div>
             {camera.error && (
-              <div className="absolute inset-x-0 bottom-0 bg-danger/90 p-3 text-center text-sm text-text">
+              // The label uses the ramp's "on this colour" token, not the body-text token.
+              // Body text on a 90% danger tint measured 3.18:1 in light and
+              // 3.22:1 in dark, both below AA; the on-colour token reads 5.63:1
+              // and 5.48:1. Class names are deliberately not written out in this
+              // comment - Tailwind's scanner does not strip comments, so naming a
+              // utility here emits a rule for it.
+              <div className="absolute inset-x-0 bottom-0 bg-danger/90 p-3 text-center text-sm text-accent-fg">
                 {camera.error}
               </div>
             )}

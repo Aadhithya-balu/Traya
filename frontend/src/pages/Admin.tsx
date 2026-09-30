@@ -135,12 +135,15 @@ export function Admin() {
         </div>
       )}
 
-      <div className="mt-6 flex gap-1 overflow-x-auto border-b border-line">
+      {/* `.scroll-x` not `flex overflow-x-auto`: the composed class also hides the
+          scrollbar and bleeds to the screen edge. `tap` because these tabs are
+          32px tall otherwise. */}
+      <div className="scroll-x mt-6 border-b border-line">
         {tabs.map((t) => (
           <button
             key={t.key}
             onClick={() => onTab(t.key)}
-            className={`whitespace-nowrap rounded-t-lg px-4 py-2 text-sm font-medium ${
+            className={`tap whitespace-nowrap rounded-t-lg px-4 py-2 text-sm font-medium ${
               tab === t.key ? "border-b-2 border-accent text-accent" : "text-muted hover:text-text"
             }`}
           >

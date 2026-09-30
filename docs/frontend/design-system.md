@@ -34,15 +34,15 @@ into, so it is not optional. See "Every colour is stored twice" below.
 | `--c-line-strong` | `--c-line-strong-rgb` | Emphasised border | `#c9c9c6` | `#3d3d41` |
 | `--c-text` | `--c-text-rgb` | Body text | `#17171a` | `#f2f2f0` |
 | `--c-muted` | `--c-muted-rgb` | Secondary text | `#5c5c63` | `#a1a1a6` |
-| `--c-faint` | `--c-faint-rgb` | Tertiary text, eyebrows | `#8a8a92` | `#6e6e75` |
+| `--c-faint` | `--c-faint-rgb` | Tertiary text, eyebrows | `#6a6a70` | `#86868c` |
 | `--c-accent` | `--c-accent-rgb` | Interactive fill | `#17171a` | `#f2f2f0` |
 | `--c-accent-text` | `--c-accent-text-rgb` | Accent-coloured text | `#17171a` | `#f2f2f0` |
 | `--c-accent-fg` | `--c-accent-fg-rgb` | Text on accent | `#ffffff` | `#0a0a0b` |
-| `--c-danger` | `--c-danger-rgb` | Danger, stop, `no match` | `#b4231f` | `#e5484d` |
+| `--c-danger` | `--c-danger-rgb` | Danger, stop, `no match` | `#b4231f` | `#ea6e71` |
 | `--c-danger-fg` | `--c-danger-fg-rgb` | Text on danger | `#ffffff` | `#1a0a0a` |
-| `--c-warn` | `--c-warn-rgb` | Caution, review required | `#8a5a00` | `#f0b429` |
+| `--c-warn` | `--c-warn-rgb` | Caution, review required | `#825500` | `#f0b429` |
 | `--c-warn-fg` | `--c-warn-fg-rgb` | Text on warn | `#ffffff` | `#1a1200` |
-| `--c-ok` | `--c-ok-rgb` | Success, high confidence | `#1f6b3a` | `#3fa45c` |
+| `--c-ok` | `--c-ok-rgb` | Success, high confidence | `#1f6b3a` | `#41aa5f` |
 | `--c-ok-fg` | `--c-ok-fg-rgb` | Text on ok | `#ffffff` | `#06180c` |
 | `--safe-top` | — | Notch inset | `env(safe-area-inset-top)` | same |
 | `--safe-bottom` | — | Home indicator inset | `env(safe-area-inset-bottom)` | same |
@@ -54,6 +54,48 @@ must mean something, so nothing is allowed to be decorative.
 
 Every `-fg` token exists because a single `accent` value is not always legible
 against itself in both themes.
+
+### Contrast is measured against the background that actually renders
+
+`backend/tests/test_contrast.py` asserts AA (4.5:1) for every text token against
+every background it is used on. It exists because four tokens passed a casual
+eyeball check and failed the measurement, and the interesting part is *where*
+they failed:
+
+| Token | Was | Plain ramp | On its own tint | Now |
+|---|---|---|---|---|
+| light `--c-faint` | `#8a8a92` | 3.17 | — | `#6a6a70` (4.71) |
+| dark `--c-faint` | `#6e6e75` | 3.91 | — | `#86868c` (4.70) |
+| dark `--c-danger` | `#e5484d` | 4.35 | 3.71 on `bg-danger/15` | `#ea6e71` (4.57) |
+| light `--c-warn` | `#8a5a00` | 5.20 | 4.26 on `bg-warn/15` | `#825500` (4.60) |
+| dark `--c-ok` | `#3fa45c` | 5.41 | 4.40 on `bg-ok/15` | `#41aa5f` (4.64) |
+
+Light `--c-warn` is the lesson. It cleared 5.20:1 on `canvas`, `surface` and
+`raised` alike, so it passed every plain check. But a badge is `bg-warn/15 text-warn`,
+and a 15% tint of the text colour over the background **pulls the background
+toward the text**, which always makes the pair worse than the plain surface. At
+`/15` over `raised` it was 4.26:1.
+
+So a tinted pairing is the worst case, never a plain ramp colour, and the test
+enumerates `bg-{tone}/{10,15} over {canvas,surface,raised}` for all three
+semantic tones in both themes. Three of the five fixes above are invisible to a
+contrast checker that only compares token against token.
+
+Two rules the codebase learned the hard way:
+
+1. **`-fg` means "on this colour", not "on the page".** The camera-error bar was
+   `bg-danger/90 text-text`, which is 3.18:1 — below AA in both themes. It is
+   now `text-accent-fg`, which is the ramp's own answer to that question and
+   measures 5.63:1 and 5.48:1. `--c-accent-fg` differs per theme (white in
+   light, near-black in dark), so a hardcoded colour would have passed in one
+   theme and failed in the other.
+2. **Solid beats translucent on a fixed bar.** `bg-canvas/90` and
+   `bg-surface/95` with `backdrop-blur` were both wrong twice: translucent, so
+   content scrolled legibly underneath the app bar on a result screen; and
+   pointless, because a blur behind a solid colour costs a compositing layer per
+   frame and shows nothing. Both bars are now opaque, and
+   `test_no_backdrop_blur_without_a_solid_background` fails if
+   `backdrop-blur` or a `bg-*/NN` bar returns to `Layout.tsx`.
 
 ## Every colour is stored twice, and the second copy is load-bearing
 
@@ -79,8 +121,11 @@ Verified in the current build output:
 ```css
 .bg-danger\/10 { background-color: rgb(var(--c-danger-rgb) / .1) }
 .border-warn\/40 { border-color: rgb(var(--c-warn-rgb) / .4) }
-.bg-canvas\/90 { background-color: rgb(var(--c-canvas-rgb) / .9) }
+.bg-ok\/15      { background-color: rgb(var(--c-ok-rgb) / .15) }
 ```
+
+Note that `bg-canvas/90` is no longer in that list: the app bar is opaque now.
+The only heavy tint left is `bg-danger/90`, on the camera-error bar.
 
 Two rules now keep it true. `test_every_opacity_modifier_on_a_ramp_colour_resolves`
 asserts `<alpha-value>` is in the config and that every ramp name has an `-rgb`
@@ -104,14 +149,26 @@ the other wrong.
 A cramped 360px screen is much easier to ship by accident with Tailwind's
 default 0.25rem steps, so the finer steps were removed.
 
-**The replacement has no `<alpha-value>`-style extras and drops a few standard
-keys.** Anything outside the table - `0.75`, `13`, `28`, `5.5` - **generates
-nothing**. `Layout` uses `-translate-x-5.5` for its theme knob, so the knob
-does not move.
+**The replacement drops a few standard keys.** Anything outside the table -
+`0.75`, `13`, `28`, `5.5` - **generates nothing**, and it is not an error.
 
 Available: `0`, `px`, `0.5`, `1`, `1.5`, `2`, `2.5`, `3`, `3.5`, `4`, `5`, `6`,
 `7`, `8`, `9`, `10`, `11`, `12`, `14`, `16`, `20`, `24`, `32`, `40`, `48`,
-`56`, `64`, `full`. Note the deliberate gap: there is no `13`.
+`56`, `64`, `full`. Note the deliberate gaps: no `13`, no `5.5`.
+
+**Phase 2 considered adding `5.5` and `13` and did not.** The migration plan
+proposed it, because `-translate-x-5.5` had been compiling to nothing and
+adding the key would have made that class work. But the caller was wrong, not
+the scale: the theme knob is a `w-6` knob in a `w-12` track, so its travel is
+1.5rem, which is `translate-x-6`. Adding `5.5` would have re-legalised the
+exact trap that had just cost a bug - an off-scale value that looks fine and
+produces no CSS - and left the next one undocumented.
+
+`test_spacing_uses_only_values_in_the_theme_table` now covers
+`translate-[xy]`, `scroll-m*` and the inset utilities as well, because the
+earlier pattern omitted `translate` and so **could not have caught the bug it
+was written for**. It strips comments before scanning, since both the test and
+`index.css` now describe these traps in prose.
 
 ## Component classes
 
@@ -137,16 +194,33 @@ for one of these before writing a long `className`.
 | `.eyebrow` | Section title that reads as a heading. |
 | `.scroll-x` | Edge-bleeding horizontal scroller with a hidden scrollbar. |
 
-Three of these exist for reasons that are not obvious from the CSS, so do not
+Four of these exist for reasons that are not obvious from the CSS, so do not
 "simplify" them away:
 
 - **`.input` is `text-base` (16px) on purpose.** Anything smaller makes iOS
   Safari zoom the viewport on focus, which breaks the layout mid-typing.
 - **`.scroll-x` hides the scrollbar entirely.** A visible scrollbar in a tab
   strip competes with the tabs themselves. It scrolls, and the content bleeding
-  to the screen edge is what tells you so.
+  to the screen edge is what tells you so. `Admin` and `EmergencyHub` were
+  hand-rolling `flex gap-1 overflow-x-auto` instead, which is the same thing
+  with a scrollbar showing; both now use the class.
 - **`.btn` sets a hard `min-height` in plain CSS, not via a token.** That is
   what makes it survive the spacing replacement.
+- **`.tap` was purged until Phase 2, because nothing used it.** Tailwind emits
+  an unused `@layer components` class out of the bundle, so a documented class
+  that no component referenced produced no CSS at all. It is applied now to the
+  bottom tab bar, `ListRow`, the `Tabs` strip, the tab strips in `Admin` and
+  `EmergencyHub`, the language toggle and the theme toggle.
+
+`.tap` on a control that is already 44px is redundant; on one that is smaller
+it is the whole point. The two places it needs a `-my-2` alongside it are
+controls that must stay visually short: the language pills and the theme toggle.
+`.tap` adds `min-height` and `-my-2` takes the difference back out, so the hit
+area is 44px and the control is still 28px. Verified in the build output:
+
+```css
+.tap { min-height: 2.75rem; min-width: 2.75rem }
+```
 
 ## Utilities
 
@@ -183,7 +257,15 @@ Four rules in `@layer base` that affect every screen:
 
 Plus a global `prefers-reduced-motion` block that collapses **every** animation
 and transition to 0.01ms. No per-component opt-out exists, which is the point:
-reduced motion is handled once, globally.
+reduced motion is handled once, globally. `test_reduced_motion_covers_every_animation`
+asserts the block still neutralises `animation-duration`,
+`animation-iteration-count` and `transition-duration` — it was previously scoped
+to the sheet entry only, which left `animate-fade-in` on the result screen and
+`animate-pulse` on the recording indicator running regardless.
+
+`index.css` also had a **second `.dark` block** in `@layer base` containing only
+`color-scheme: dark`, a duplicate of the one that holds the dark ramp. Deleted
+in Phase 2; it could not have applied anything the real block did not.
 
 ## Typography
 
@@ -230,6 +312,10 @@ are either the three above or 150ms.
 
 `minHeight.touch` is 2.75rem, `minHeight.touch-lg` is 3rem, `minWidth.touch` is
 2.75rem. 44px is the iOS guideline, and `.tap` applies it to both axes.
+
+**`touch-lg` is unused**, which is the same failure `.tap` had: a token in the
+config that no class references. It is 48px, and there is no control that needs
+48px, so Phase 2 left it rather than inventing a use for it.
 
 ## i18n namespaces
 

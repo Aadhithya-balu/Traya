@@ -94,7 +94,7 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 
 | Fact | Value |
 |---|---|
-| Backend tests | **147 passed**, ~46s, exit 0 |
+| Backend tests | **189 passed**, ~45s, exit 0 |
 | Frontend typecheck | **passes**, exit 0, strict TS |
 | `npm run docs:check` | **passes**, 29 pages |
 | Endpoints | **47** across 7 routers |
@@ -175,65 +175,76 @@ Ranked in [docs/AUDIT.md](docs/AUDIT.md#bugs-ranked). The five that matter:
 9. **`theme.spacing` is `replace`, not `extend`.** `0.5` is 0.125rem, there is
    no `5.5` and no `13`. Anything outside the table **compiles to nothing** — the
    same silent failure as an opacity modifier on a ramp colour.
-10. **44px minimum touch targets** via `.tap`. Note `.tap` is currently
-    **purged** because no component uses it; Phase 2 fixes it.
+10. **44px minimum touch targets** via `.tap`. Phase 2 applied it, so it is no
+    longer purged. An `@layer components` class that no component references
+    emits **no CSS at all** — the same silent failure as a bare `var()` colour.
+    Do not add a class and leave it unused.
+11. **Contrast is measured, not eyeballed.** `backend/tests/test_contrast.py`
+    asserts 4.5:1. A **tinted** pairing is always the worst case: `bg-{tone}/15`
+    pulls the background toward `text-{tone}`, so light `--c-warn` measured
+    5.20:1 on every plain surface and 4.26:1 on its own badge. Check the tinted
+    pair.
+12. **Do not name a Tailwind class inside a comment.** The content scanner does
+    not strip comments, so a class mentioned in prose is a class the build emits
+    a rule for. `test_no_utility_name_appears_only_in_a_comment` fails the build
+    on it. Describe the utility in words instead.
 
 ### Frontend architecture
 
-11. **All network calls go through `src/api/client.ts`.** Repo-wide, `fetch(`
+13. **All network calls go through `src/api/client.ts`.** Repo-wide, `fetch(`
     appears exactly twice, both inside the client. Never add a third outside it.
-12. **Layout routes render `<Outlet />`, not `{children}`.** `App.tsx` wraps
+14. **Layout routes render `<Outlet />`, not `{children}`.** `App.tsx` wraps
     pages in `<Route element={<Layout />}>`.
-13. **`EmergencyContext` is a guarded `JSON.parse`** against `sessionStorage`.
+15. **`EmergencyContext` is a guarded `JSON.parse`** against `sessionStorage`.
     Keep the guard.
-14. **Every user-visible string is an i18n key.** Five pages still hardcode
+16. **Every user-visible string is an i18n key.** Five pages still hardcode
     English (see the gap list in §7).
 
 ### Backend architecture
 
-15. **New queries go in `app/repositories/`.** Never in a router or a service.
-16. **Repositories flush but never commit.** The caller owns the transaction, so
+17. **New queries go in `app/repositories/`.** Never in a router or a service.
+18. **Repositories flush but never commit.** The caller owns the transaction, so
     a domain write and its audit row land together. A repository that commits
     breaks that invariant.
-17. **New tables or columns require an Alembic migration**
+19. **New tables or columns require an Alembic migration**
     (`alembic revision --autogenerate`) **plus a check that the demo seed is
     still idempotent** on the migrated schema.
-18. **Authentication is `Depends(get_current_user)` plus a permission helper**
+20. **Authentication is `Depends(get_current_user)` plus a permission helper**
     from `app/security/permissions.py`. Authorization is a data question, not a
     role-string comparison.
 
 ### Testing
 
-19. **`pytest` env vars go at the very top of `tests/conftest.py`, before any
+21. **`pytest` env vars go at the very top of `tests/conftest.py`, before any
     `app` import** — `TESTING=1`, `DEMO_MODE=1`, `DATABASE_URL`. The suite uses a
     fresh temp SQLite DB, removed per run.
-20. **`TestClient.delete()` has no `json=` kwarg.** Use
+22. **`TestClient.delete()` has no `json=` kwarg.** Use
     `client.request("DELETE", url, headers=..., json=...)`.
-21. **`pytest.ini` sets `addopts = -q`.** Passing another `-q` yields `-qq`,
+23. **`pytest.ini` sets `addopts = -q`.** Passing another `-q` yields `-qq`,
     which suppresses the `N passed` summary. Judge success by `$LASTEXITCODE`,
     not by the missing summary.
 
 ### Biometric determinism
 
-22. **Synthetic face seeds must be deterministic.** The face feature space is
+24. **Synthetic face seeds must be deterministic.** The face feature space is
     small, so arbitrary identity strings collide — observed
     `unknown-person-X9` vs `test-identity` = 0.807. **Never introduce a
     random UUID-based identity into enrollment; it made the suite flaky.** The
     demo no-match identity is `enroll-demo-charlie-99`.
-23. `app/api/demo.py` seeds the demo-enroll face from `user.email`, and
+25. `app/api/demo.py` seeds the demo-enroll face from `user.email`, and
     `test_demo_enroll_works_with_consent` uses a fixed account. On purpose.
-24. **All demo data is fictional and must stay that way.** No real names,
+26. **All demo data is fictional and must stay that way.** No real names,
     addresses, phone numbers or medical histories. Emails ending `.local` are
     rejected by pydantic `EmailStr`; demo uses `.demo.traya` / `.responder.traya`.
 
 ### Security
 
-25. **Biometric embeddings are encrypted at rest (Fernet) and never returned to
+27. **Biometric embeddings are encrypted at rest (Fernet) and never returned to
     clients.** There is no endpoint that returns a vector, and **no agent may add
     one**. Never log raw vectors. Never log unredacted clinical detail.
-26. **Never log or commit secrets.** `SECRET_KEY` / `ENCRYPTION_KEY` come from
+28. **Never log or commit secrets.** `SECRET_KEY` / `ENCRYPTION_KEY` come from
     `.env`; see `.env.example`.
-27. **`ENCRYPTION_KEY` is derived from `SECRET_KEY` if unset.** Rotating
+29. **`ENCRYPTION_KEY` is derived from `SECRET_KEY` if unset.** Rotating
     `SECRET_KEY` without setting `ENCRYPTION_KEY` makes every stored embedding
     **permanently unreadable**. Set both, together, deliberately.
 
@@ -291,7 +302,7 @@ C:\Traya\
         medical, notification, location, hospital, audit_service
       main.py                app factory, lifespan, health, SPA serving
     migrations\              Alembic (4 versions)
-    tests\                   pytest, 147 tests
+    tests\                   pytest, 189 tests
   frontend\
     src\
       pages\                 10 pages, all routed
@@ -370,6 +381,11 @@ longer 403s, the Match Result tab renders, Logout is unreachable from
 and `ink-*`/`slate-*` are gone from every component. Details in
 [docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md#phase-1) and the Phase 1 outcome
 section of [docs/AUDIT.md](docs/AUDIT.md).
+
+**Fixed in Phase 2** — do not re-report: `.tap` is no longer purged, the app bar
+and tab bar are opaque, five colour tokens now clear 4.5:1 on every background
+they render on, and contrast is asserted by `backend/tests/test_contrast.py`
+instead of being eyeballed.
 
 1. **The biometric engine is a simulation.** See §1. Recorded in
    [ADR 0001](docs/decisions/0001-simulation-biometric-engine.md).

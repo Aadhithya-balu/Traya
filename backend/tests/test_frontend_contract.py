@@ -366,9 +366,16 @@ def test_spacing_uses_only_values_in_the_theme_table():
     assert table, "tailwind.config.js must declare a spacing table"
     allowed = set(re.findall(r"^\s*[\"']?([\w.-]+)[\"']?:", table.group(1), re.M))
     bad: dict[str, list[str]] = {}
-    pattern = re.compile(r"(?<![\w-])(?:m|p|gap|space-[xy]|w|h|top|left|right|bottom|inset)-(\d+(?:\.\d+)?)(?![\w-])")
+    # `translate` is here because that is where the failure actually landed:
+    # `-translate-x-5.5` compiled to nothing and the theme toggle knob never
+    # visibly moved. The earlier version of this pattern omitted `translate`, so
+    # it could not have caught the bug it was written for.
+    pattern = re.compile(
+        r"(?<![\w-])(?:m|p|gap|space-[xy]|w|h|top|left|right|bottom|inset"
+        r"|translate-[xy]|scroll-m[xy]|scroll-mt|scroll-mb)-(\d+(?:\.\d+)?)(?![\w-])"
+    )
     for path in sorted(FRONTEND.rglob("*.tsx")):
-        text = path.read_text(encoding="utf-8")
+        text = _strip_comments(path.read_text(encoding="utf-8"))
         used = {u for u in pattern.findall(text) if u not in allowed and u != "0"}
         if used:
             bad[path.relative_to(FRONTEND).as_posix()] = sorted(used)
@@ -376,3 +383,14 @@ def test_spacing_uses_only_values_in_the_theme_table():
         "spacing values outside theme.spacing (they compile to nothing):\n"
         + json.dumps(bad, indent=2)
     )
+
+
+def _strip_comments(text: str) -> str:
+    """Drop `//` and `/* */` comments before scanning a source file.
+
+    Both this module and index.css now explain these traps in prose, and a
+    pattern that matches `5.5` inside a comment fails on the documentation of
+    its own bug.
+    """
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"^\s*//[^\n]*$", "", text, flags=re.M)

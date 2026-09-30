@@ -153,6 +153,58 @@ Low, but visual. Every page changes appearance. This is the phase most likely to
 surface "it looked fine before" complaints, and the answer is that before it was
 rendering nothing.
 
+### Outcome - passed, with two deviations and one gate item unverified
+
+Everything in the gate is met except the eight-viewport check, which needs a
+browser and is therefore Phase 13. Measured instead: zero fixed pixel widths
+anywhere in `src/`, no `w-[Npx]` or `min-w-[Npx]`, every grid is single-column
+below `sm`, the only `whitespace-nowrap` values sit inside a horizontal
+scroller, and `body { overflow-x: hidden }` is still in place.
+
+**The plan was wrong twice and the code was right twice.**
+
+1. *Extend the spacing table with `5.5` and `13`.* Did not. `-translate-x-5.5`
+   compiled to nothing because the theme knob is a `w-6` knob in a `w-12` track,
+   so its travel is 1.5rem — `translate-x-6`. Adding `5.5` would have
+   re-legalised the trap and left the knob still unmoved. The caller was wrong,
+   not the scale. `13` is still unused.
+2. *Darken `--c-faint`.* Cannot be done in dark mode — darkening a token
+   separates it from a near-black canvas by making it invisible, and dark
+   `--c-faint` was 3.91:1 partly for that reason. In dark mode `--c-faint` is
+   *lightened* to `#86868c`. The second option the plan offered, restrict it to
+   large text, was rejected: it is used for `.eyebrow`, placeholders and inactive
+   tab labels, so restricting it would leave real text unreadable.
+
+**Four further tokens failed the measurement, none of them on the list.** The
+audit's own rule — a tinted pairing is the worst case — turned out to be the
+whole story. Dark `--c-danger` was 4.35:1 on `raised` and 3.71:1 on its own
+`bg-danger/15` badge; light `--c-warn` passed every plain-surface check at
+5.20:1 and still failed at 4.26:1 on its tint; dark `--c-ok` failed at 4.40:1.
+The camera-error bar was worse still — `bg-danger/90 text-text` is 3.18:1, and
+the fix was `text-accent-fg`, a token the ramp already had for exactly this
+question. All of it is now asserted by `backend/tests/test_contrast.py` (41
+tests), which enumerates `bg-{tone}/{10,15,90}` over every background in both
+themes.
+
+Also landed, because they were the same class of silent failure:
+`test_spacing_uses_only_values_in_the_theme_table` now scans `translate-[xy]`
+and `scroll-m*` (it previously omitted `translate`, so it could not have caught
+the bug it was written for); the dead duplicate `.dark` block in `index.css` is
+gone; `Admin` and `EmergencyHub` were hand-rolling `flex overflow-x-auto` instead
+of the composed `.scroll-x`; and `prefers-reduced-motion` was already global,
+contrary to the plan's claim that it covered only the sheet entry — it now has a
+test.
+
+**One more silent failure, found while verifying the above.** Tailwind's content
+scanner does not strip comments, so a class named in a comment is a class the
+scanner sees and the rule is emitted. The comment explaining why the app bar's
+blur was removed named it, and the build shipped a `.backdrop-blur` rule for a
+utility nothing used — the same "unused class" trap `.tap` fell into, one level
+down. The comments now avoid class syntax, and
+`test_no_utility_name_appears_only_in_a_comment` fails the build if one returns.
+
+189 backend tests pass, frontend typecheck and build pass, `docs:check` passes.
+
 ## Phase 3 - Stand up Supabase
 
 **Problem.** SQLite is the default. No Supabase, no pgvector, no RLS, no

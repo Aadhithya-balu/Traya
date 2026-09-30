@@ -36,8 +36,12 @@
     --c-text-rgb: 23 23 26;
     --c-muted: #5c5c63;
     --c-muted-rgb: 92 92 99;
-    --c-faint: #8a8a92;
-    --c-faint-rgb: 138 138 146;
+    /* faint was #8a8a92, which is only 3.17:1 on canvas. It is used for real
+       text - .eyebrow, placeholder text, inactive tab labels - so it has to
+       clear 4.5:1, not 3:1. Worst case is `raised`, the lightest background
+       content sits on: 4.71:1. */
+    --c-faint: #6a6a70;
+    --c-faint-rgb: 106 106 112;
 
     --c-accent: #17171a;
     --c-accent-rgb: 23 23 26;
@@ -50,8 +54,11 @@
     --c-danger-rgb: 180 35 31;
     --c-danger-fg: #ffffff;
     --c-danger-fg-rgb: 255 255 255;
-    --c-warn: #8a5a00;
-    --c-warn-rgb: 138 90 0;
+    /* Was #8a5a00. Clears 5.20:1 on a plain ramp colour but only 4.26:1 on a
+       bg-warn/15 badge tint, because the tint darkens the background toward the
+       text. Every tinted pairing is the worst case, not a plain surface. */
+    --c-warn: #825500;
+    --c-warn-rgb: 130 85 0;
     --c-warn-fg: #ffffff;
     --c-warn-fg-rgb: 255 255 255;
     --c-ok: #1f6b3a;
@@ -80,8 +87,11 @@
     --c-text-rgb: 242 242 240;
     --c-muted: #a1a1a6;
     --c-muted-rgb: 161 161 166;
-    --c-faint: #6e6e75;
-    --c-faint-rgb: 110 110 117;
+    /* 4.70:1 worst case. Darkening this to separate it from the canvas made it
+       unreadable on `raised`; lightening is the only direction that works in
+       dark mode. */
+    --c-faint: #86868c;
+    --c-faint-rgb: 134 134 140;
 
     --c-accent: #f2f2f0;
     --c-accent-rgb: 242 242 240;
@@ -90,16 +100,22 @@
     --c-accent-fg: #0a0a0b;
     --c-accent-fg-rgb: 10 10 11;
 
-    --c-danger: #e5484d;
-    --c-danger-rgb: 229 72 77;
+    /* Was #e5484d at 4.35:1 on `raised`, and only 3.71:1 on its own bg-danger/15
+       badge tint - the tint darkens the background toward the text, so the
+       worst case is never a plain ramp colour. Same hue, lighter until every
+       real pairing clears 4.5:1; --c-danger-fg still reads 6.38:1 on it. */
+    --c-danger: #ea6e71;
+    --c-danger-rgb: 234 110 113;
     --c-danger-fg: #1a0a0a;
     --c-danger-fg-rgb: 26 10 10;
     --c-warn: #f0b429;
     --c-warn-rgb: 240 180 41;
     --c-warn-fg: #1a1200;
     --c-warn-fg-rgb: 26 18 0;
-    --c-ok: #3fa45c;
-    --c-ok-rgb: 63 164 92;
+    /* 5.41:1 on a plain ramp colour, but 4.40:1 on bg-ok/15 over `raised`. Green
+       loses luminance fast as it lightens, so this had to move a long way. */
+    --c-ok: #41aa5f;
+    --c-ok-rgb: 65 170 95;
     --c-ok-fg: #06180c;
     --c-ok-fg-rgb: 6 24 12;
   }
@@ -129,13 +145,6 @@
   ::selection {
     background: var(--c-text);
     color: var(--c-canvas);
-  }
-
-  /* Light and dark share one class name via these custom properties, so there
-     are no `dark:` variants anywhere in the components. These two are the only
-     place the mode is consulted. */
-  .dark {
-    color-scheme: dark;
   }
 }
 

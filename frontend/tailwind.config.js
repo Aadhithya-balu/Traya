@@ -58,6 +58,10 @@ export default {
       10: "2.5rem",
       11: "2.75rem",
       12: "3rem",
+      // No 5.5 and no 13. Phase 2 considered adding both, because `-translate-x-5.5`
+      // silently compiled to nothing. Adding them would have re-legalised the
+      // exact trap that just cost a bug: an off-scale value that looks fine and
+      // produces no CSS. The caller was wrong, not the scale.
       14: "3.5rem",
       16: "4rem",
       20: "5rem",
