@@ -72,13 +72,21 @@ Backend, from `backend/`:
 python -m venv .venv
 .venv\Scripts\activate            # Windows (or: source .venv/bin/activate)
 pip install -r requirements.txt
-copy .env.example .env            # Windows (cp on *nix)
+copy .env.example .env            # Windows (cp on *nix) - optional, see below
 python -m alembic upgrade head
 python -m app.services.demo.seed
 python -m uvicorn app.main:app --port 8000
 ```
 
 OpenAPI docs are at <http://localhost:8000/docs>.
+
+`.env` is optional only because every setting has a default that works for the
+demo. It was also *silently* optional for most of this project's life:
+`BASE_DIR` resolved to `backend/app`, so the app looked for a `.env` in a
+directory that never had one and ignored any file you put in `backend/`.
+Fixed in Phase 3, with `tests/test_settings_path.py` holding the path in place.
+If you configure anything, you need this file — see
+[docs/backend/configuration.md](docs/backend/configuration.md).
 
 Frontend, from `frontend/`:
 

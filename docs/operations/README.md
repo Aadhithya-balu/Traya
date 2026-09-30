@@ -84,19 +84,33 @@ successful build is a successful typecheck.
 loudly - and a **misspelled key fails silently into its default**, which for
 `SECRET_KEY` or `ENCRYPTION_KEY` is a security problem, not a typo.
 
+**The file itself was never read until Phase 3.** `BASE_DIR` was
+`Path(__file__).resolve().parent.parent`, which from `app/config/settings.py`
+resolves to `backend/app`, so `env_file` pointed at `backend/app/.env` — a path
+that has never existed. Anyone who followed the setup instructions above
+produced a file the application ignored, and nothing said so: the app behaved
+identically with and without one because every value fell back to its class
+default. It is now `parents[2]`, which is `backend/`, and
+`backend/tests/test_settings_path.py` asserts the path, proves a file there is
+loaded through `Settings`, and fails if `backend/.env` is ever tracked by git.
+
+If you are configuring anything at all, `.env` is not optional. If you are only
+running the SQLite demo, it still is, because the defaults work.
+
 Full field reference: [configuration.md](../backend/configuration.md).
 
 ### `.env.example` is incomplete
 
-It documents 20 of the 36 settings. It is **missing** every setting added since
+It documents 20 of the 37 settings. It is **missing** every setting added since
 it was written:
 
 `DATABASE_FALLBACK_URL`, `DATABASE_ALLOW_FALLBACK`,
 `DATABASE_PROBE_TIMEOUT_SECONDS`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
-`SUPABASE_SERVICE_ROLE_KEY`, `JWT_ALGORITHM`, `RATE_LIMIT_ENABLED`,
-`PUBLIC_IDENTIFY_LIMIT`, `PUBLIC_IDENTIFY_WINDOW_SECONDS`, `AUTH_LIMIT`,
-`AUTH_WINDOW_SECONDS`, `MAX_UPLOAD_BYTES`, `ALLOWED_IMAGE_MIMES`,
-`BIOMETRIC_ALGO_VERSION`, `EMBEDDING_DIM`, `TESTING`, `API_PREFIX`.
+`SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_PROJECT_REF`, `JWT_ALGORITHM`,
+`RATE_LIMIT_ENABLED`, `PUBLIC_IDENTIFY_LIMIT`,
+`PUBLIC_IDENTIFY_WINDOW_SECONDS`, `AUTH_LIMIT`, `AUTH_WINDOW_SECONDS`,
+`MAX_UPLOAD_BYTES`, `ALLOWED_IMAGE_MIMES`, `BIOMETRIC_ALGO_VERSION`,
+`EMBEDDING_DIM`, `TESTING`, `API_PREFIX`.
 
 A new developer who copies the example gets none of the rate limiting, upload
 limits, Supabase wiring or probe timeouts. **Bring the example back in line with

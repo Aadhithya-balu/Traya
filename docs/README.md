@@ -87,10 +87,10 @@ npm run docs:check
 ```
 
 It exits non-zero and lists every uncovered identifier with the page that should
-own it. Currently 20 checks over 23 pages, covering 47 endpoints, 38 models, 4
-migrations, 73 repository identifiers, 70 service identifiers, 36 settings,
-25 permission and role identifiers, 20 pages and components, 17 icons, 44 API
-methods, 24 types, 11 routes, 40 design tokens and i18n namespaces.
+own it. Currently 20 checks over 29 pages, covering 47 endpoints, 38 models, 4
+migrations, 73 repository identifiers, 70 service identifiers, 37 settings,
+25 permission and role identifiers, 20 pages and components, 17 icons, 43 API
+methods, 26 types, 11 routes, 34 design tokens and i18n namespaces.
 
 `npm run verify` at the root is an alias for the same check.
 

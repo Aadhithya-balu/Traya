@@ -4,7 +4,12 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+# backend/, not backend/app/. This is three `.parent`s from a file at
+# app/config/settings.py. It was two, which resolved to backend/app and meant
+# the app looked for backend/app/.env - a file that has never existed - so every
+# documented instruction to set a value in backend/.env silently did nothing.
+# Settings were always falling back to the defaults below.
+BASE_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
@@ -30,6 +35,11 @@ class Settings(BaseSettings):
     SUPABASE_URL: str = ""
     SUPABASE_ANON_KEY: str = ""
     SUPABASE_SERVICE_ROLE_KEY: str = ""
+    # The 20-character project ref. Recorded so Phase 4 can build RLS and
+    # storage policies without asking for it again. Nothing reads it yet, and
+    # it is declared here rather than left loose in `.env` on purpose: a key the
+    # app ignores is a key someone will assume is working.
+    SUPABASE_PROJECT_REF: str = ""
 
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7

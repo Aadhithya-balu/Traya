@@ -593,3 +593,61 @@ browser, no camera, no E2E. The contract tests prove the client sends
 Logout button off `/emergency/*`. **They do not prove a person can complete an
 identification on a phone.** Phase 1's gate is met; the product in a hand is
 not yet proven.
+
+---
+
+## Phase 3 opening: the `.env` file had never been read
+
+Found while writing `backend/.env` for the Supabase credentials, and it is the
+third instance of the same failure this audit keeps hitting.
+
+`BASE_DIR` in `app/config/settings.py` was `Path(__file__).resolve().parent.parent`.
+From `app/config/settings.py` that resolves to **`backend/app`**, so `env_file`
+pointed at `backend/app/.env` — a path that has never existed and that no
+document, example file or setup instruction ever mentioned. Every documented
+instruction in the repository ("copy `backend/.env.example` to `backend/.env`")
+produced a file nobody read.
+
+The consequences were quieter than a crash:
+
+- `DATABASE_URL`, `SECRET_KEY` and all 34 other fields silently fell back to
+  their class defaults. The app behaved **identically with and without a
+  `.env`**, so there was no way to notice from the outside.
+- Every "edit the threshold in `.env`" instruction in these docs was doubly
+  ineffective — `AGENTS.md` §8.7 already warns that a seeded
+  `system_settings` row overrides the env var. The real answer was that *no*
+  env var ever reached the process.
+- The SQLite default in §2 of this audit was described as a deliberate
+  fallback choice. It was true, but partly for the wrong reason: a
+  `DATABASE_URL` pointing at Postgres would not have been honoured either.
+
+**This is the same shape as the missing `<alpha-value>` and the purged `.tap`:** a
+setting that looks applied and is not, with no error and a green build. The
+only defence is an assertion aimed at the mechanism, so
+`tests/test_settings_path.py` now checks the resolved path, loads a throwaway
+`.env` through `Settings` to prove the wiring end to end, and asserts
+`backend/.env` is not tracked by git.
+
+Verified after the fix:
+
+    199 passed, 8 warnings in 30.62s   EXITCODE=0
+
+Two things surfaced while fixing it, both worth recording:
+
+- **`SUPABASE_PROJECT_REF` was in the `.env` but not a `Settings` field.**
+  `extra="ignore"` drops unknown keys without a word, so a credential the app
+  never reads looks identical to one it does. It is now declared, unused, and
+  documented as unused.
+- **The 12 existing embeddings would have been destroyed by rotating
+  `SECRET_KEY`.** They were encrypted with the Fernet key derived from the
+  *default* `SECRET_KEY`, because `ENCRYPTION_KEY` was empty and the `.env` was
+  never read. Writing a fresh `SECRET_KEY` without pinning `ENCRYPTION_KEY`
+  would have made all 12 permanently unreadable on the first `demo.py` rerun —
+  which is exactly the failure `AGENTS.md` §3.29 warns about, reached by a
+  route nobody would have predicted. The generated `.env` pins
+  `ENCRYPTION_KEY` to the key those 12 rows actually use; verified by decrypting
+  all 12 through `app.security.crypto`. `SECRET_KEY` can now be rotated freely.
+
+Also worth noting as a category, not an excuse: `backend/.env.example`
+documents 20 of 36 settings, and the audit's own §2 facts are consistent with a
+project that had never been configured through its own configuration surface.

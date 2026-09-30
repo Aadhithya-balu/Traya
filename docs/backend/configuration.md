@@ -10,6 +10,20 @@ time is expected behaviour**, not a bug.
 
 Copy `backend/.env.example` to `backend/.env` before first run.
 
+**The path was wrong until Phase 3, and every setting in it was ignored.**
+`BASE_DIR` was `Path(__file__).resolve().parent.parent`, which from
+`app/config/settings.py` resolves to `backend/app`, so `env_file` pointed at
+`backend/app/.env` — a path that has never existed. The file was documented,
+recommended in this page and in the README, and read by nobody. Every value
+fell through to the class defaults, including `DATABASE_URL` and `SECRET_KEY`,
+so the app behaved identically with and without a `.env`. It is now
+`parents[2]`, which is `backend/`.
+
+This is the same failure mode as a mistyped Tailwind class: no error, a build
+that passes, and a setting that looks applied and is not. `test_env_file_is_where_the_docs_say`
+now asserts the resolved path is the backend root and that the directory
+exists, so it cannot regress silently.
+
 ## Application
 
 | Field | Default | Effect |
@@ -33,6 +47,16 @@ Copy `backend/.env.example` to `backend/.env` before first run.
 undecryptable.** There is no re-encryption migration. See
 [ADR 0005](../decisions/0005-biometric-encryption-at-rest.md).
 
+This is not hypothetical: the 12 embeddings in the dev `traya.db` were encrypted
+with the key derived from the *default* `SECRET_KEY`, precisely because
+`ENCRYPTION_KEY` was empty and the `.env` was never being read. Generating a
+fresh `SECRET_KEY` without pinning `ENCRYPTION_KEY` first would have destroyed
+them on the next seed. The `backend/.env` created in Phase 3 pins
+`ENCRYPTION_KEY` to the value those rows actually use — verified by decrypting
+all 12 through `app.security.crypto` — so `SECRET_KEY` can now be rotated
+freely. **If you are starting a new deployment, set `ENCRYPTION_KEY` explicitly
+before anything is enrolled.**
+
 Never commit `.env`. Both values belong in the platform secret store, not in
 `alembic.ini` or a compose file.
 
@@ -47,6 +71,7 @@ Never commit `.env`. Both values belong in the platform secret store, not in
 | `SUPABASE_URL` | `""` | Project URL. |
 | `SUPABASE_ANON_KEY` | `""` | Browser-safe key. |
 | `SUPABASE_SERVICE_ROLE_KEY` | `""` | Server-only key. Never expose to the frontend. |
+| `SUPABASE_PROJECT_REF` | `""` | The 20-character project ref. **Declared but unread.** Phase 4 needs it to author RLS and storage policies. It exists as a field rather than a loose line in `.env` because `extra="ignore"` drops unknown keys silently: a key the app never reads is a key someone will believe is wired up. |
 
 Resolution order and the degraded-mode contract are in
 [ADR 0003](../decisions/0003-supabase-primary-sqlite-fallback.md).
@@ -139,7 +164,7 @@ presented as such.
 
 1. `SECRET_KEY` and `ENCRYPTION_KEY` from a secret store. Never the defaults.
 2. `DATABASE_ALLOW_FALLBACK=false` so an unreachable primary fails loudly.
-3. `DATABASE_URL` pointing at Supabase/PostgreSQL, plus the three `SUPABASE_*`
+3. `DATABASE_URL` pointing at Supabase/PostgreSQL, plus the four `SUPABASE_*`
    values if the frontend talks to Supabase directly.
 4. `DEMO_MODE=false`. It seeds fictional citizens and opens two unauthenticated
    endpoints that run synthetic faces through the real pipeline.
