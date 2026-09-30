@@ -117,6 +117,62 @@ limits, Supabase wiring or probe timeouts. **Bring the example back in line with
 `settings.py`** - and consider having the docs check compare the two, since a
 drifting example is worse than no example.
 
+### Setting up Supabase
+
+Two files to run in the **Supabase SQL editor**, in this order. Both are
+idempotent, and both have been executed against a real Postgres 16 with pgvector,
+not written blind.
+
+| Order | File | What it does |
+|---|---|---|
+| 1 | `migrations/supabase/001_extensions.sql` | `create extension vector, pgcrypto`, then asserts both installed |
+| 2 | `migrations/supabase/002_storage_buckets.sql` | Two private Storage buckets, optional |
+
+Then apply the schema, which is Alembic's job, not the editor's:
+
+```powershell
+cd backend
+$env:DATABASE_URL="postgresql+psycopg://postgres.<REF>:<PASSWORD>@aws-0-<REGION>.pooler.supabase.com:5432/postgres"
+.venv\Scripts\python.exe -m alembic upgrade head
+.venv\Scripts\python.exe -m alembic check
+```
+
+**Do not paste a schema.** All 22 tables come from `alembic upgrade head`, which
+also seeds the 7 roles and 18 permissions. Hand-writing a schema in the editor
+produces a second source of truth that drifts from the models, and the very next
+`alembic check` will disagree with it. The plan's `003_functions.sql` and
+`004_seed_roles.sql` were not written for this reason, and
+`001_extensions.sql` says so in a comment.
+
+Verify once the migrations have run:
+
+```sql
+select count(*) from roles;        -- 7
+select count(*) from permissions;  -- 18
+select extname from pg_extension where extname in ('vector','pgcrypto');
+```
+
+#### Why there is no `face_embeddings` table yet
+
+The plan maps `biometric_embeddings` to a pgvector `face_embeddings` column.
+That is not possible today and the blocker is not a missing project.
+`embedding_blob` is a `bytea` column of **Fernet-encrypted** numpy bytes
+(`registry.py:23`, `recognition.py:72`); a pgvector column holds plaintext
+float4. Creating the table now would add an empty column nothing reads while
+the real data stayed in ciphertext that pgvector cannot index — a table that
+looks like a completed migration without one having happened. It also collides
+with the encryption-at-rest decision in `AGENTS.md` §3.27 and
+[ADR 0005](../decisions/0005-biometric-encryption-at-rest.md), so it belongs to
+Phase 4 or 5, not to a schema paste. The extension is enabled so that step is
+one command when the time comes.
+
+#### Storage retention is still outstanding
+
+The plan calls for retention policies on the buckets. Those are Storage object
+lifecycle rules configured in the dashboard (Storage → Buckets → *bucket* →
+Settings); there is no portable SQL for them. Do not treat `002` as covering
+retention.
+
 ### Values that must change before production
 
 | Setting | Why |

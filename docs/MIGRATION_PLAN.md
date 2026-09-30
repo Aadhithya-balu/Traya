@@ -299,6 +299,48 @@ claim made before this point was untested**.
 | Dead primary fails to start | `EXITCODE=1`, `ConnectionTimeout`. Did not fall back. |
 | `/api/health` survives a database killed mid-flight | `HTTP 200`, `state=disconnected`, `connect=False`, URL masked. |
 | `pgvector` + `pgcrypto` install and are visible to `psycopg` | Both created, `pg_extension` lists them. |
+| Seeded permission matrix on Postgres | 7 roles, 18 permissions — matches the counts in `AGENTS.md` §2. |
+| **Emergency identification, end to end, on Postgres** | Session started unauthenticated, identify returned `200` / `HIGH_CONFIDENCE` / 0.995, candidate `accepted`, `engine_mode=simulation`. Seeding, Fernet encryption, matching, tiering and quality scoring all work. |
+| Row counts match the dev database | 9 users, 12 embeddings, 8 consents — 12 embeddings identical to `traya.db`. |
+
+### What to run in the Supabase SQL editor
+
+Two files, in order. Both idempotent, both executed against real Postgres 16
+before being committed — not written blind.
+
+| Order | File | Purpose |
+|---|---|---|
+| 1 | `migrations/supabase/001_extensions.sql` | `create extension vector, pgcrypto` + an assertion that both exist |
+| 2 | `migrations/supabase/002_storage_buckets.sql` | Two private buckets, optional |
+
+**Then `alembic upgrade head`, not a pasted schema.** All 22 tables and the
+permission matrix come from Alembic. A hand-written schema in the editor creates
+a second source of truth that the next `alembic check` will contradict. This is
+why the plan's `003_functions.sql` and `004_seed_roles.sql` were not written:
+they would duplicate the Alembic seed in `56a8e0eed1a8`, and the permission
+matrix should have exactly one definition.
+
+Both files were run twice against the same database to prove idempotency: second
+run reported `INSERT 0 0` and `extension already exists, skipping`, exit 0.
+Alembic applied cleanly *after* them, on a database where neither extension had
+existed beforehand.
+
+**Why there is no `face_embeddings` table, which the plan does call for.** The
+mapping to a pgvector column cannot be done yet, and the reason is not a missing
+project. `biometric_embeddings.embedding_blob` is a `bytea` column of
+**Fernet-encrypted** numpy bytes (`registry.py:23`, `recognition.py:72`); a
+pgvector column holds plaintext float4, and ciphertext does not go in. Adding the
+table now would create an empty column that nothing reads while the real data
+stayed in a form pgvector cannot index or search — a table that looks like a
+completed migration without one having happened.
+
+It also collides with a security decision: `AGENTS.md` §3.27 and
+[ADR 0005](decisions/0005-biometric-encryption-at-rest.md) put embeddings behind
+encryption at rest with no re-encryption migration. Storing searchable plaintext
+vectors changes that posture, which is a Phase 4 decision about access, not a
+schema paste. The extension is enabled so the step is one command when it is
+ready. **This is a deviation from the plan's entity mapping and it is
+deliberate.**
 
 Commands, so none of this is taken on trust. Both migration commands exited 0;
 the suite reported 207 passed; the final boot exited 1.
@@ -324,20 +366,20 @@ docker stop traya-pg
 `TRAYA_TEST_DATABASE_URL` is a `conftest.py` addition. Unset, the suite runs
 on a temp SQLite file exactly as it always did.
 
-**Still blocked, and genuinely so:** step 1 (create the project), the Storage
-buckets (step 5) and the hosted-project data migration (step 7) need a Supabase
-account. `SUPABASE_URL` and the two keys are credentials — they cannot be
-derived, guessed or generated. Everything else in this phase is done.
+**Still blocked, and genuinely so:** step 1 (create the project) and the
+hosted-project run. `SUPABASE_URL` and the two keys are credentials — they
+cannot be derived, guessed or generated. Everything else in this phase is done,
+tested, or deliberately declined.
 
 | Step | State |
 |---|---|
 | 1. Record the four `SUPABASE_*` values | Slots ready in `backend/.env`, empty. Needs the account. |
 | 2. Install `supabase` / `pgvector` | `psycopg` 3.3.4 present; `vector` verified working in Postgres. The Supabase SDK is only needed for Phase 11. |
-| 3. Write `migrations/supabase/*.sql` | Not written. Deliberate — see below. |
-| 4. Enable `pgcrypto` + `vector` | **Verified working** on Postgres 16. Statement still needed for the hosted project. |
-| 5. Storage buckets | Blocked on a project. |
+| 3. Write `migrations/supabase/*.sql` | **Done, with a deviation.** `001_extensions.sql` and `002_storage_buckets.sql` exist and are tested. `003`/`004` deliberately not written — they would duplicate the Alembic seed. No `face_embeddings` table; see above. |
+| 4. Enable `pgcrypto` + `vector` | **Done and tested.** `001_extensions.sql` creates both and asserts them. |
+| 5. Storage buckets | **Done and tested.** Two private buckets. Retention policies are dashboard work and remain outstanding. |
 | 6. Explicit opt-in fallback | **Complete.** |
-| 7. Data migration + row-count verification | Blocked on a project. |
+| 7. Data migration + row-count verification | **Partly done.** Row counts verified on a fresh Postgres (9 users, 12 embeddings, 8 consents). Moving the existing dev rows across is a separate step and remains. |
 
 **Step 3 is still not written, and that is a judgement worth stating.** The
 entity mapping renames 19 tables and rewrites the embeddings column to
@@ -349,11 +391,17 @@ writable the moment there is a project to apply it to.
 
 | Gate item | State |
 |---|---|
-| Schema applies cleanly | **Pass on Postgres 16** via Alembic. Not yet on Supabase. |
-| `psycopg` connects, queries work | **Pass.** 207 tests on Postgres. |
-| Data migration verified: counts + spot-checks | Blocked on a project. |
+| Schema applies cleanly | **Pass on Postgres 16** via Alembic, after `001_extensions.sql`. Not yet on Supabase. |
+| `psycopg` connects, queries work | **Pass.** 207 tests, plus a live emergency identification. |
+| Data migration verified: counts + spot-checks | **Counts pass** on a freshly seeded database. Migrating existing dev rows is not done. |
 | Dead primary fails to start | **Pass, proven by stopping the container.** |
 | `alembic check` no drift | **Pass on Postgres** (`EXITCODE=0`). |
+
+**What is left needs the account:** run the two SQL files on the hosted
+project, point `DATABASE_URL` at it, run `alembic upgrade head`, and set the
+four `SUPABASE_*` values. Step 7's row migration has not been written — with no
+real user data in existence (all demo), re-seeding is the honest migration and
+the plan says so.
 
 **Three defects found by running it, none on the plan's list:**
 
