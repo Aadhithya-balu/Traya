@@ -94,7 +94,7 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 
 | Fact | Value |
 |---|---|
-| Backend tests | **189 passed**, ~45s, exit 0 |
+| Backend tests | **189 passed** at commit `497e7af`. **207 passed** after Phase 3, ~40s, exit 0 |
 | Frontend typecheck | **passes**, exit 0, strict TS |
 | `npm run docs:check` | **passes**, 29 pages |
 | Endpoints | **47** across 7 routers |
@@ -391,9 +391,12 @@ instead of being eyeballed.
    [ADR 0001](docs/decisions/0001-simulation-biometric-engine.md).
 2. **No RLS, no pgvector, no Supabase SDK, no Storage.** Authorization is
    Python-only. `database/*.sql` does not exist.
-3. **SQLite is the default database**, and `DatabaseService` **silently falls
-   back** to it when the Postgres probe fails. Real medical data can land in a
-   local file. Removing this is Phase 3, and it is a deliberate behaviour change.
+3. **The silent SQLite fallback is gone** — `DATABASE_ALLOW_FALLBACK` defaults
+   to `false` and `DEMO_MODE=false` refuses it outright, so real medical data
+   cannot land in a local file unless somebody deliberately opts in. What is
+   still Phase 3 is the other half: **no Supabase project, no pgvector, no
+   Storage.** `backend/.env` has the four `SUPABASE_*` slots ready and empty.
+   Deleting the SQLite file is still deliberately undone.
 4. **Five pages still hardcode English**: `EmergencyHub`, `Profile`, `Admin`,
    `Demo`, `Privacy`. Their colours are migrated; their strings are not.
 5. **94 of 186 i18n keys are unreferenced.** The whole 25-key `enroll.*`
@@ -466,3 +469,11 @@ instead of being eyeballed.
 
 The first two are Phase 3. The third is Phase 5. **Until each phase's gate
 passes, the rollback path is still there.** Preserve it.
+
+**Update, Phase 3.** Item 2 is done: `DATABASE_ALLOW_FALLBACK` now defaults to
+**false**, and `DEMO_MODE=false` refuses the fallback even when the flag is
+true. The rollback is one env var, not a code change —
+`DATABASE_ALLOW_FALLBACK=true` restores the old behaviour exactly. Do not
+"fix" a fallback you did not expect by setting that flag on a deployment
+without understanding that it is the data-loss switch. Items 1 and 3 are
+untouched.

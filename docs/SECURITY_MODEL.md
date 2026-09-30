@@ -21,7 +21,7 @@ yet. Implementation-level detail lives in
 | **Row Level Security** | **Absent.** Python-only authorization |
 | **Session storage** | **`localStorage`.** Vulnerable to XSS and extensions |
 | **Content Security Policy** | **Absent** |
-| **Silent database fallback** | **Present.** Can put real medical data in a local file |
+| **Silent database fallback** | **Closed in Phase 3.** Opt-in, off by default, refused in production mode |
 | **Secret rotation** | **Manual.** No dual-key acceptance window |
 
 The gap is not the cryptography. It is **who decides access**: the application
@@ -205,15 +205,25 @@ medical data they should not see.
 
 **Attacker.** No attacker. A network blip at boot.
 
-`DatabaseService` falls back to SQLite when the Postgres probe fails and
-`DATABASE_ALLOW_FALLBACK` is true - the default. The UI does surface
-`demo_offline`, which is honest, but the operational risk is real: **a
-deployment configured for Supabase can persist real medical and biometric data
-into a local file** without anyone intending it.
+`DatabaseService` used to fall back to SQLite when the Postgres probe failed and
+`DATABASE_ALLOW_FALLBACK` was true — **which was the default**. The UI did
+surface `demo_offline`, which is honest, but the operational risk was real: **a
+deployment configured for Supabase could persist real medical and biometric data
+into a local file** without anyone intending it. The failure is quiet by
+construction: a `logger.warning`, a working app, HTTP 200s, and emergency
+records in a file that is not shared with responders and not covered by
+row-level security.
 
-Mitigation, and it is a behavioural change: the fallback becomes **opt-in and
-off by default**, and a production-mode deployment that cannot reach Postgres
-**fails to start**. Failing loudly beats storing PHI somewhere unintended.
+**Mitigated in Phase 3.** The fallback is now opt-in and off by default, and
+`DEMO_MODE=false` refuses it regardless of the flag, so a production deployment
+that cannot reach Postgres **fails to start**. Two conditions rather than one:
+a permissive default that production inherits, and a stray env var that
+re-authorises data loss, are both ways to get here, and closing only one leaves
+the other. The degraded path also logs at `ERROR` and states what is lost.
+
+Failing loudly beats storing PHI somewhere unintended. The rollback is
+`DATABASE_ALLOW_FALLBACK=true` in the environment — one variable, no code
+change — so nothing about this is irreversible.
 
 ### T5 - Malicious upload
 
@@ -301,8 +311,11 @@ A test asserts the first of these rather than trusting review.
 
 Stated so a future agent does not "fix" it:
 
-- **No silent degradation.** Removing the automatic SQLite fallback is a
-  behaviour change, not a bug fix.
+- **No silent degradation.** Removing the automatic SQLite fallback was a
+  behaviour change, not a bug fix, and it is done — so this is now a note
+  against putting it back. If you find yourself enabling
+  `DATABASE_ALLOW_FALLBACK` to make a deployment boot, you have traded an
+  outage you can see for one you cannot.
 - **No user read access to their own vectors.** Someone who wants to delete
   their biometrics should delete them, not export them.
 - **No standing clinical access for responders.** Access requires an active

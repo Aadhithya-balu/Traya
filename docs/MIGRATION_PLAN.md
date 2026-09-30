@@ -46,6 +46,13 @@ phase 1 fixes the thing that makes the product not work at all.
 Phase 3 runs on its own track because Supabase setup is waiting on a project URL
 and keys. It can proceed while phase 1 is in review.
 
+**Phase 3 status: partially done, blocked on credentials.** The infrastructure
+free part is complete — `backend/.env` exists with the four `SUPABASE_*` values
+and the `DATABASE_URL` line to change, the `.env` path bug that made every one
+of those settings inert is fixed, and step 6 (the silent SQLite fallback) is
+finished and tested. Steps 1, 4, 5, 7 and the schema/data gate items need a
+real project. See the outcome section at the end of this phase.
+
 ## Phase 1 - Unblock the emergency flow
 
 **Problem.** The public emergency identification flow returns 403 on every step
@@ -204,6 +211,7 @@ down. The comments now avoid class syntax, and
 `test_no_utility_name_appears_only_in_a_comment` fails the build if one returns.
 
 189 backend tests pass, frontend typecheck and build pass, `docs:check` passes.
+(207 after Phase 3, which adds 18 more.)
 
 ## Phase 3 - Stand up Supabase
 
@@ -269,6 +277,48 @@ Demo accounts are re-seeded. No real user data is lost, because none exists.
 **Medium - the highest-risk phase in the plan.** Mitigated by: SQLite is never
 deleted; the migration is a separate SQL script, not an Alembic rewrite; and the
 row-count verification is a gate, not a suggestion.
+
+### Outcome - partially done, blocked on credentials
+
+**Done and verified:**
+
+| Step | State |
+|---|---|
+| Record the four `SUPABASE_*` values | `backend/.env` created with the four slots and the `DATABASE_URL` line to change. Awaiting values. |
+| 6. Fallback is explicit, opt-in, defaults off | **Complete.** `DATABASE_ALLOW_FALLBACK` defaults to `False`; `DEMO_MODE=false` refuses it regardless. Degraded path logs at `ERROR`. |
+| 2. Install `supabase` and `pgvector` | Not started. `psycopg` 3.3.4 is already present and is what the app connects with; the SDK is only needed for Phase 11. |
+
+**Not started, and why:** steps 1, 3, 4, 5 and 7 all require a real Supabase
+project. The schema SQL, the `pgcrypto`/`vector` extensions and the Storage
+buckets cannot be written blind — a migration set nobody has applied is a guess
+dressed as an asset, which is the failure mode `AGENTS.md` §8 warns about.
+
+**Gate status:**
+
+| Gate item | State |
+|---|---|
+| Unreachable primary fails to start | **Pass.** `tests/test_database_fallback.py` — fails with the flag off, fails in production mode even with the flag on, and still works when explicitly opted in, so it is a real branch and not a permanently-dead one. |
+| Schema applies cleanly | Blocked on a project |
+| `psycopg` connects, queries work | Blocked on a project |
+| Data migration verified | Blocked on a project |
+| `alembic check` no drift | Blocked on a project |
+
+**Two defects found while doing step 6, neither on the plan's list:**
+
+- **`/api/health` 500'd in exactly the case it exists to report.** Resolution
+  was outside the never-raise guard, so with the fallback off and a dead
+  primary, `initialize()` raised inside `health()`. Monitoring would see a
+  failing endpoint rather than a failed database — a monitor that fires once
+  and goes quiet instead of one that pages. Resolution is now inside the guard
+  and returns `connect: false` with `reason: "unresolved"`.
+- **The plan's step 6 said "defaults off" but did not mention that
+  `DEMO_MODE=false` should also refuse it.** A permissive flag is still
+  reachable by env var on a production deployment, which is one `kubectl edit`
+  away from re-authorising exactly the loss the change exists to prevent. Two
+  independent conditions, both tested as a matrix.
+
+The `.env` path defect and the embedding-key hazard are written up in
+[AUDIT.md](AUDIT.md#phase-3-opening-the-env-file-had-never-been-read).
 
 ## Phase 4 - Row Level Security
 

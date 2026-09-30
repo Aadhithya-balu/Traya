@@ -66,7 +66,7 @@ Never commit `.env`. Both values belong in the platform secret store, not in
 |---|---|---|
 | `DATABASE_URL` | `sqlite:///./traya.db` | Primary. Also the target `migrations/env.py` uses. |
 | `DATABASE_FALLBACK_URL` | `""` | Secondary candidate tried after the primary fails to probe. |
-| `DATABASE_ALLOW_FALLBACK` | `True` | Whether a failure may fall back to SQLite at all. **Set to `False` in production** so an unreachable primary is a startup failure, not a silent downgrade to an unbacked local file. |
+| `DATABASE_ALLOW_FALLBACK` | `False` | Whether a failed primary may degrade to SQLite. **Default `False` since Phase 3**: pointing `DATABASE_URL` at Supabase and losing the network is now a startup failure, not a silent downgrade to an unbacked local file. Also refused outright when `DEMO_MODE=false`, so the flag alone cannot authorise data loss in production. Opt back in with `DATABASE_ALLOW_FALLBACK=true` — that is the rollback path, and it is one env var rather than a code change. |
 | `DATABASE_PROBE_TIMEOUT_SECONDS` | `3.0` | Connect timeout when probing Postgres. |
 | `SUPABASE_URL` | `""` | Project URL. |
 | `SUPABASE_ANON_KEY` | `""` | Browser-safe key. |
@@ -77,6 +77,26 @@ Resolution order and the degraded-mode contract are in
 [ADR 0003](../decisions/0003-supabase-primary-sqlite-fallback.md).
 `GET /api/health` reports the resolved backend, the `degraded` flag and the
 reason, and masks the password in the URL.
+
+**Why the fallback is off by default, and why the flag is not sufficient.**
+The old default was `True`, so the "fail loudly" guarantee held only for
+deployments that remembered to opt in — and the failure it guards against is
+one where nothing is obviously wrong. A Supabase outage produced a fully
+working app, green health checks at the HTTP layer, emergency data in a local
+file, and a single `logger.warning` nobody reads. Two conditions now have to
+agree before any fallback happens: the flag is on, **and** `DEMO_MODE` is on.
+`DEMO_MODE=false` is the production switch, and it outranks the flag, so
+setting `DATABASE_ALLOW_FALLBACK=true` on a production deployment does not
+re-enable data loss — it just produces a loud refusal and a startup error.
+
+Zero-config demo is unaffected. When `DATABASE_URL` is already SQLite,
+`initialize` returns before the fallback is ever consulted, so the default
+change touches no SQLite-primary path. `test_sqlite_primary_never_consults_the_fallback`
+exists to hold that.
+
+Note that the fallback is not the same thing as the demo. The demo can run on
+Postgres; the fallback is what happens when Postgres is gone. Conflating them
+is what made the old default dangerous.
 
 ## Authentication
 

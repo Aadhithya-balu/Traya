@@ -126,7 +126,7 @@ drifting example is worse than no example.
 | `DEBUG` | Must be `False`. |
 | `DEMO_MODE` | Must be `False`. It gates synthetic data, synthetic images and the demo endpoints. |
 | `DATABASE_URL` | Must point at Supabase/PostgreSQL. |
-| `DATABASE_ALLOW_FALLBACK` | Consider `False` in production so a database outage fails loudly instead of silently writing to a local SQLite file. |
+| `DATABASE_ALLOW_FALLBACK` | Already `False` by default since Phase 3. Leave it. Turning it on re-authorises writing emergency data to a local file during an outage — see [SECURITY_MODEL.md](../SECURITY_MODEL.md) T4. |
 | `CORS_ORIGINS` | Replace the four dev origins with the real ones. |
 | `BIOMETRIC_ENGINE` | Leave `auto` or set `simulation` - see below. |
 

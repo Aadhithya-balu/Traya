@@ -279,9 +279,14 @@ skin-tone blob.
 `DatabaseService` (`app/database/service.py`) that resolves one engine at
 startup with a Supabase/Postgres primary and a **silent SQLite fallback**.
 
-The fallback is the problem. `service.py:114-130`: if the Postgres probe
-fails and `DATABASE_ALLOW_FALLBACK` is true (the default), it starts on local
-SQLite and sets `degraded=True, reason="primary_unavailable"`.
+> **Superseded, Phase 3.** The fallback was opt-in-but-defaulted-on, and is now
+> opt-in-and-defaulted-off with a second `DEMO_MODE=false` refusal. Details and
+> the `/api/health` defect found alongside it in the Phase 3 outcome section
+> below. The paragraph underneath describes the state at commit `497e7af`.
+
+The fallback was the problem. `service.py:114-130`: if the Postgres probe
+failed and `DATABASE_ALLOW_FALLBACK` was true — **and it was** — it started on
+local SQLite and set `degraded=True, reason="primary_unavailable"`.
 
 There is a mitigation - `_connection_state()` (`main.py:92`) returns
 `"demo_offline"`, `/api/health` reports it, and the UI shows it. The design

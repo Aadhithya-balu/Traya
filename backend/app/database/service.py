@@ -87,6 +87,34 @@ class DatabaseService:
             conn.execute(text("SELECT 1"))
 
     # ------------------------------------------------------------- resolve
+    def _fallback_permitted(self) -> bool:
+        """Whether a failed primary may degrade to SQLite.
+
+        Two independent conditions, because either one alone is a way to lose
+        an incident without noticing:
+
+        - ``DATABASE_ALLOW_FALLBACK`` must be true. It defaults to false, so
+          pointing ``DATABASE_URL`` at Supabase and having the network fail is
+          a startup error rather than a quiet downgrade.
+        - ``DEMO_MODE`` must be true. Demo mode is explicitly the SQLite
+          fallback's world; in production the answer is no regardless of the
+          flag, so a stray env var cannot re-enable data loss.
+
+        Neither check matters when the primary is already SQLite, which is the
+        zero-config path: :meth:`initialize` returns before the fallback is
+        ever consulted.
+        """
+        if not settings.DATABASE_ALLOW_FALLBACK:
+            return False
+        if not settings.DEMO_MODE:
+            logger.error(
+                "DATABASE_ALLOW_FALLBACK is true but DEMO_MODE is false. Refusing "
+                "to fall back: production runs must not degrade to a local SQLite "
+                "file."
+            )
+            return False
+        return True
+
     def initialize(self) -> DatabaseStatus:
         """Pick the backend. Idempotent; safe to call on every boot."""
         with self._lock:
@@ -112,8 +140,8 @@ class DatabaseService:
                 logger.info("Database backend: %s", self._status.backend)
                 return self._status
             except Exception as exc:
-                logger.warning("Primary database unavailable: %s", exc)
-                if not settings.DATABASE_ALLOW_FALLBACK:
+                logger.error("Primary database unavailable: %s", exc)
+                if not self._fallback_permitted():
                     raise
                 self._status = self._activate(
                     fallback,
@@ -123,9 +151,13 @@ class DatabaseService:
                     reason="primary_unavailable",
                     detail=type(exc).__name__,
                 )
-                logger.warning(
-                    "Falling back to SQLite demo storage. TRAYA will run, but "
-                    "this deployment is not using the primary database."
+                logger.error(
+                    "FALLING BACK TO SQLITE. Identifications, embeddings and audit "
+                    "rows from this point are written to a local file that is not "
+                    "shared with responders, not covered by row-level security, and "
+                    "not backed up. This is a degraded emergency mode, not a normal "
+                    "state. Set DATABASE_ALLOW_FALLBACK=false to make an unreachable "
+                    "primary a startup failure instead."
                 )
                 return self._status
 
@@ -178,21 +210,41 @@ class DatabaseService:
         """Re-probe the active engine and refresh the cached status.
 
         Never raises: an unreachable database is reported as a status, not an
-        exception, because /api/health must stay answerable.
+        exception, because `/api/health` must stay answerable. Resolving the
+        backend is inside the guard too, not just the probe. It used to sit
+        outside, so with `DATABASE_ALLOW_FALLBACK=false` and a dead primary the
+        resolution raised here and the endpoint 500'd — precisely the situation
+        it exists to report. Now it returns `connect: false`, which is the
+        difference between a monitor that pages you and one that fires once and
+        goes quiet.
         """
-        st = self.status
-        checks: dict[str, bool] = {}
         try:
-            with self.engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-                checks["connect"] = True
-                from sqlalchemy import inspect
+            st = self.status
+            checks: dict[str, bool] = {}
+            try:
+                with self.engine.connect() as conn:
+                    conn.execute(text("SELECT 1"))
+                    checks["connect"] = True
+                    from sqlalchemy import inspect
 
-                checks["schema"] = bool(inspect(self.engine).get_table_names())
-                st.tables = len(inspect(self.engine).get_table_names())
+                    names = inspect(self.engine).get_table_names()
+                    checks["schema"] = bool(names)
+                    st.tables = len(names)
+            except Exception as exc:
+                checks["connect"] = False
+                logger.warning("Database health check failed: %s", exc)
         except Exception as exc:
-            checks["connect"] = False
-            logger.warning("Database health check failed: %s", exc)
+            logger.warning("Database resolution failed: %s", exc)
+            return DatabaseStatus(
+                backend="none",
+                dialect="none",
+                masked_url=_mask(settings.DATABASE_URL),
+                primary_configured=not settings.is_sqlite,
+                degraded=False,
+                reason="unresolved",
+                detail=type(exc).__name__,
+                checks={"connect": False},
+            )
         st.checks = checks
         return st
 

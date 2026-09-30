@@ -217,12 +217,14 @@ entire biometric database.
 
 Supabase/PostgreSQL is the production target; SQLite is the development and demo
 fallback. `app/database/service.py` probes the primary with a 3-second timeout
-and, when `DATABASE_ALLOW_FALLBACK` is on and the probe fails, switches to the
-fallback URL. See [ADR 0003](decisions/0003-supabase-primary-sqlite-fallback.md).
+and, when a fallback is permitted and the probe fails, switches to the fallback
+URL. See [ADR 0003](decisions/0003-supabase-primary-sqlite-fallback.md).
 
-A silent fallback is a feature in development and a hazard in production: a
-PostgreSQL outage would quietly start writing emergency data to a local file.
-Consider `DATABASE_ALLOW_FALLBACK=false` in production.
+**Since Phase 3 the fallback is off by default, and there is nothing to
+remember.** `DATABASE_ALLOW_FALLBACK` defaults to `False` and is additionally
+refused when `DEMO_MODE=false`, so a PostgreSQL outage is a startup failure
+rather than a quiet start writing emergency data to a local file. Opting back
+in takes two variables and is the intended rollback, not a workaround.
 
 Four migrations exist; `alembic check` is the one that catches model drift, and
 `upgrade head` only proves the existing migrations run.

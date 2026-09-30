@@ -30,7 +30,11 @@ class Settings(BaseSettings):
     # demo and development fallback (see app/database/service.py).
     DATABASE_URL: str = "sqlite:///./traya.db"
     DATABASE_FALLBACK_URL: str = ""
-    DATABASE_ALLOW_FALLBACK: bool = True
+    # Opt-in, and off by default. A configured-but-unreachable primary must fail
+    # startup, not quietly run against an unbacked local file. This does not
+    # affect the zero-config demo: when DATABASE_URL is already SQLite the
+    # fallback path is never consulted at all.
+    DATABASE_ALLOW_FALLBACK: bool = False
     DATABASE_PROBE_TIMEOUT_SECONDS: float = 3.0
     SUPABASE_URL: str = ""
     SUPABASE_ANON_KEY: str = ""
