@@ -123,10 +123,21 @@ Two files to run in the **Supabase SQL editor**, in this order. Both are
 idempotent, and both have been executed against a real Postgres 16 with pgvector,
 not written blind.
 
-| Order | File | What it does |
-|---|---|---|
-| 1 | `migrations/supabase/001_extensions.sql` | `create extension vector, pgcrypto`, then asserts both installed |
-| 2 | `migrations/supabase/002_storage_buckets.sql` | Two private Storage buckets, optional |
+| Order | File | What it does | When |
+|---|---|---|---|
+| 1 | `migrations/supabase/001_extensions.sql` | `create extension vector, pgcrypto`, then asserts both installed | Before Alembic |
+| 2 | `migrations/supabase/002_storage_buckets.sql` | Two private Storage buckets, optional | Any time |
+| 3 | `migrations/supabase/004_revoke_anon.sql` | Removes the anon key's read access to `public` | **After** `alembic upgrade head` |
+Order matters for `004`, which is the reason the files are numbered: it
+asserts that `postgres` holds grants in `public`, so it refuses to run against
+an empty schema. Run it after the tables exist.
+
+**Run `004` on any project that has hosted data in it, even demo data.** Supabase
+grants `anon` `SELECT` on every table in `public` by default, and `anon` is the
+key that ships in the frontend bundle. On this project the anon key read all
+four of `users`, `biometric_embeddings`, `audit_logs` and `medical_profiles`
+before the file existed, and gets `401` after it. Details and the measurements
+are in [SECURITY_MODEL.md](../SECURITY_MODEL.md#the-anon-grant-is-now-revoked-on-the-hosted-project).
 
 Then apply the schema, which is Alembic's job, not the editor's:
 
@@ -157,7 +168,9 @@ also seeds the 7 roles and 18 permissions. Hand-writing a schema in the editor
 produces a second source of truth that drifts from the models, and the very next
 `alembic check` will disagree with it. The plan's `003_functions.sql` and
 `004_seed_roles.sql` were not written for this reason, and
-`001_extensions.sql` says so in a comment.
+`001_extensions.sql` says so in a comment. `004_revoke_anon.sql` is a different
+thing entirely — it removes a default grant rather than duplicating the schema,
+so it does not conflict with the seed that lives in Alembic.
 
 Verify once the migrations have run:
 

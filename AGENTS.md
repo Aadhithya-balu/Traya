@@ -95,7 +95,8 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 | Fact | Value |
 |---|---|
 | Backend tests | **189 passed** at commit `497e7af`. **207 passed** after Phase 3, ~40s, exit 0 |
-| Backend tests on real Postgres | **207 passed**, same count. `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
+| Backend tests on real Postgres | **207 passed**, same count. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
+| Hosted Supabase | **Live and verified.** PostgreSQL 17.11, 22 tables, 7 roles / 18 permissions, full emergency flow returns HIGH_CONFIDENCE 0.995 |
 | Frontend typecheck | **passes**, exit 0, strict TS |
 | `npm run docs:check` | **passes**, 29 pages |
 | Endpoints | **47** across 7 routers |
@@ -106,8 +107,9 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 | Thresholds | HIGH 0.82, REVIEW 0.62, FALLBACK_FACE 0.60, BOOST 0.05/0.06 |
 | Max impostor similarity | **0.817** — 6 of 30 impostor pairs exceed the 0.62 review threshold |
 | Rows in `face_embeddings` / pgvector | **none** — the column does not exist |
-| RLS policies | **none** — `database/rls.sql` is referenced in a docstring but does not exist |
-| Supabase SDK | **not installed** |
+| RLS policies | **none** — `database/rls.sql` is referenced in a docstring but does not exist. The `anon` grant that made this exploitable **is revoked** (`004_revoke_anon.sql`); the anon key now gets 401 on every app table |
+| Storage buckets | **2, private**, created on the hosted project. Retention policies still to set in the dashboard |
+| Supabase SDK | **not installed** — the app connects with `psycopg` as `postgres`, so nothing needs it |
 | Frontend test runner | **none** |
 
 ### ML libraries available in `backend\.venv`
@@ -392,14 +394,18 @@ instead of being eyeballed.
 
 1. **The biometric engine is a simulation.** See §1. Recorded in
    [ADR 0001](docs/decisions/0001-simulation-biometric-engine.md).
-2. **No RLS, no pgvector, no Supabase SDK, no Storage.** Authorization is
-   Python-only. `database/*.sql` does not exist.
+2. **No RLS, no pgvector, no Supabase SDK.** Authorization is Python-only.
+   `database/*.sql` does not exist, and `public` on the hosted project still has
+   `rowsecurity` off on all 22 tables. What changed in Phase 3 is that the
+   exposure is no longer open: `004_revoke_anon.sql` revokes the default `anon`
+   grants, so the public key reads nothing. Real RLS is Phase 4.
 3. **The silent SQLite fallback is gone** — `DATABASE_ALLOW_FALLBACK` defaults
    to `false` and `DEMO_MODE=false` refuses it outright, so real medical data
-   cannot land in a local file unless somebody deliberately opts in. What is
-   still Phase 3 is the other half: **no Supabase project, no pgvector, no
-   Storage.** `backend/.env` has the four `SUPABASE_*` slots ready and empty.
-   Deleting the SQLite file is still deliberately undone.
+   cannot land in a local file unless somebody deliberately opts in. **Supabase
+   is now live and is the configured primary**: all 4 migrations applied, 22
+   tables, 7 roles / 18 permissions, emergency flow verified at 0.995. What is
+   still open: deleting the local `traya.db` is deliberately undone, and
+   **bucket retention policies** are dashboard work with no portable SQL.
 4. **Five pages still hardcode English**: `EmergencyHub`, `Profile`, `Admin`,
    `Demo`, `Privacy`. Their colours are migrated; their strings are not.
 5. **94 of 186 i18n keys are unreferenced.** The whole 25-key `enroll.*`

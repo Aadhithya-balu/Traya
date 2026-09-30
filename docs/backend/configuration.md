@@ -69,8 +69,8 @@ Never commit `.env`. Both values belong in the platform secret store, not in
 | `DATABASE_ALLOW_FALLBACK` | `False` | Whether a failed primary may degrade to SQLite. **Default `False` since Phase 3**: pointing `DATABASE_URL` at Supabase and losing the network is now a startup failure, not a silent downgrade to an unbacked local file. Also refused outright when `DEMO_MODE=false`, so the flag alone cannot authorise data loss in production. Opt back in with `DATABASE_ALLOW_FALLBACK=true` — that is the rollback path, and it is one env var rather than a code change. |
 | `DATABASE_PROBE_TIMEOUT_SECONDS` | `3.0` | Connect timeout when probing Postgres. |
 | `SUPABASE_URL` | `""` | Project URL. |
-| `SUPABASE_ANON_KEY` | `""` | Browser-safe key. |
-| `SUPABASE_SERVICE_ROLE_KEY` | `""` | Server-only key. Never expose to the frontend. |
+| `SUPABASE_ANON_KEY` | `""` | Browser-safe key. **Reads nothing on the hosted project** - `004_revoke_anon.sql` revokes its `public` grants, and a request with it returns `401 42501`. It is kept configured because the dashboard and any future client-side path expect it, not because the app uses it. |
+| `SUPABASE_SERVICE_ROLE_KEY` | `""` | Server-only key. Never expose to the frontend. Note the app does **not** use it either: it authenticates to Postgres with `psycopg` as `postgres`, so the key is recorded rather than wired. |
 | `SUPABASE_PROJECT_REF` | `""` | The 20-character project ref. **Declared but unread.** Phase 4 needs it to author RLS and storage policies. It exists as a field rather than a loose line in `.env` because `extra="ignore"` drops unknown keys silently: a key the app never reads is a key someone will believe is wired up. |
 
 Resolution order and the degraded-mode contract are in

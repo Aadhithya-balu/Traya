@@ -40,6 +40,41 @@ anon key must be treated as a full read of anything it is granted. The Python
 permission matrix is real work, but it is the only layer, and a JWT is not a
 wall.
 
+### The anon grant is now revoked on the hosted project
+
+The measurement above was taken against a throwaway local database. In Phase 3
+the project was pointed at real Supabase, and **the exposure was confirmed
+there, not merely predicted**: with nothing but the project URL and the anon key,
+PostgREST returned HTTP 200 for every table tried.
+
+| Table, anon key only | Before `003` | After `003` |
+|---|---|---|
+| `users` | 200, 3 rows of real email addresses | 401 `42501` |
+| `biometric_embeddings` | 200, 7026 chars of ciphertext | 401 `42501` |
+| `audit_logs` | 200, 1 row | 401 `42501` |
+| `medical_profiles` | 200, 1 row | 401 `42501` |
+
+**The ciphertext row is the one that mattered.** Encryption at rest protects a
+stolen database file. It does not protect a blob that anyone can download with
+a key designed to be public, which is a materially easier attack: offline
+key search against bytes the attacker already holds. AGENTS.md §3.27 and
+[ADR 0005](decisions/0005-biometric-encryption-at-rest.md) both promise
+embeddings are never exposed, and while that grant existed the promise was being
+undercut one layer below the API, where no amount of Python discipline reaches.
+
+`migrations/supabase/004_revoke_anon.sql` closes it: 154 grants removed from
+`anon` on `public`, all 154 owner grants to `postgres` retained, and
+`ALTER DEFAULT PRIVILEGES` applied so a future migration cannot silently re-open
+the same door. The file asserts both conditions, so a partial run raises instead
+of passing quietly.
+
+This is a grant revocation, **not RLS**, and it is not a substitute for it.
+Revoking one role is a closed front door; RLS is per-row authorization for
+authenticated callers, which is the actual Phase 4 deliverable. TRAYA connects
+as `postgres` over `psycopg` and never uses `anon` or `authenticated`, so
+removing them broke nothing — verified by re-running the full emergency flow
+afterwards, which still returned 200 with an accepted match.
+
 ## Trust boundaries
 
 | Boundary | Trust level | Assumption |
@@ -210,7 +245,7 @@ medical data they should not see.
 | Mitigation | State |
 | --- | --- |
 | Application permission check | **Real** |
-| RLS | **Absent** - Phase 4 |
+| RLS | **Absent** - Phase 4. The `anon` grant that made it exploitable is revoked by `004_revoke_anon.sql`. |
 | Emergency-profile endpoint gated on status and role | **Real** |
 | Audit on profile access | **Real** |
 
