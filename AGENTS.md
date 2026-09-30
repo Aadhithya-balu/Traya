@@ -1,235 +1,442 @@
-# TRAYA — Agent Rules & Project Context
+# TRAYA — Agent Rules
 
-AI-assisted emergency victim identification platform. A single photo of an
-unresponsive person flows through real quality checks, biometric matching,
-medical alerting, contact notification and hospital routing.
+**Read this before you change anything.** Then read the docs it points to. Do
+not read the codebase to find out how it works — the answers are written down,
+and the codebase will mislead you in at least one important place.
 
-This file is the authoritative context for AI agents working in this repo.
-Read it before making changes. It is a live document: update it when project
-facts change.
+This file is authoritative and live. When a project fact changes, this file and
+the owning docs page change with it.
 
-## Repo layout
+---
+
+## 0. START HERE
+
+| You want to know | Read | Cost |
+|---|---|---|
+| What actually exists today | [docs/AUDIT.md](docs/AUDIT.md) | 1 page |
+| Where this is going | [docs/TARGET_ARCHITECTURE.md](docs/TARGET_ARCHITECTURE.md) | 1 page |
+| What order to work in | [docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md) | 1 page |
+| Anything, explained without jargon | [docs/NON_TECHNICAL.md](docs/NON_TECHNICAL.md) | 1 page |
+| A specific subsystem | The 20 reference pages below | targeted |
+
+**The 30-second version:** this is a well-built prototype whose centre is a
+placeholder. The documentation, tests, API design, RBAC, audit trail and design
+system are real and good — keep all of it. **There is no real face detection and
+no real face embedding.** Everything else in this plan is built around fixing
+that honestly.
+
+---
+
+## 1. THE ONE THING YOU MUST NOT GET WRONG
+
+> **`opencv-python` is installed, and face detection still does not run.**
+
+This is stated here first because it is the trap that makes reasonable agents
+wrong.
+
+`engine.py:37` decides the engine mode with
+`bool(hasattr(cv2, "CascadeClassifier"))`. Measured on this machine:
 
 ```
-C:\Traya\
-  backend\            FastAPI + SQLAlchemy + Alembic (Python)
-    app\
-      api\            routers: auth, users, emergency, demo, biometric, hospitals, admin
-      config\         pydantic-settings (settings.py)
-      database\       session, init_db, probe + Supabase/SQLite fallback (service.py)
-      models\         SQLAlchemy models
-      repositories\   the only layer that touches the database
-      schemas\        Pydantic schemas
-      security\       auth (JWT/roles), password, crypto (Fernet), rate_limit
-      services\       demo (seed + synthetic image gen), identification (engine, pipeline,
-                      registry, confidence), hospital, location, medical, notification, audit
-      utils\          helpers (image decode, session codes)
-      main.py         app factory, lifespan, health, SPA serving
-    migrations\       Alembic (env.py, script.py.mako, versions\)
-    tests\            pytest suite (130 tests)
-    requirements.txt
-    alembic.ini, pytest.ini, .env.example
-  frontend\           React 18 + TypeScript + Vite 5 + Tailwind 3 (no UI library)
-    src\pages\        Landing, Login, Register, Emergency, EmergencyHub, Demo, Dashboard, Profile, Admin, Privacy
-    src\components\   Layout, Guards, Sheet, Tabs, StatusBadge, QualityPanel, icons
-    src\context\      AuthContext, EmergencyContext
-    src\hooks\        useCamera, useGeolocation
-    src\api\          client.ts (relative /api), types.ts
-    src\i18n\         index.tsx, strings.ts (en + ta, 20 namespaces)
-    src\theme\        ThemeProvider.tsx
-    vite.config.ts    base "./", dev proxy /api -> 127.0.0.1:8000
-  scripts\            dev-all.mjs (root launcher), check-docs.mjs (docs enforcement)
-  docs\               ARCHITECTURE.md + backend/ + frontend/ + operations/ + decisions/
-  package.json        root: dev:all, docs:check, verify
-  README.md
-  AGENTS.md           (this file)
+cv2.__version__                    -> 5.0.0     (installed)
+hasattr(cv2, 'data')               -> True      (present)
+os.listdir(cv2.data.haarcascades)  -> ['__init__.py', '__pycache__']   (EMPTY)
+hasattr(cv2, 'CascadeClassifier')  -> False     (REMOVED in OpenCV 5)
 ```
 
-## Stack & environment
+Two independent reasons the real path never executes:
 
-- OS: Windows, PowerShell 5.1. Never use `&&`; use `cmd1; if ($?) { cmd2 }`.
-- Backend: Python 3.14.2, venv at `backend\.venv`. Import via
-  `.venv\Scripts\python.exe` (resolves to `C:\Python314\python.exe`).
-- Frontend: Node v24, npm 11.6.2. Vite dev binds `localhost` (IPv6 `::1`);
-  uvicorn binds `127.0.0.1` (IPv4). When probing, use explicit hosts.
-- DB: SQLite by default (`sqlite:///./traya.db`); Postgres supported via
-  `DATABASE_URL` + `psycopg`. Dev DB file `backend\traya.db` is gitignored.
+1. **`cv2.CascadeClassifier` was removed in OpenCV 5.** The classic Haar cascade
+   API is gone, so `_HAS_CV2` is `False`.
+2. **The cascade directory contains no `.xml` files.** There is nothing to load
+   even if the class existed.
 
-## Commands
+So the guard at `engine.py:282` is never entered:
 
-Run these from the repo root unless noted.
+```python
+if _HAS_CV2 and settings.BIOMETRIC_ENGINE in ("auto", "opencv"):
+```
+
+**Setting `BIOMETRIC_ENGINE=opencv` in `.env` does not give you real detection.**
+It satisfies the second clause of that `and` and nothing about the first. The
+engine falls through to `_simulate_detect` and reports `source="simulation"`
+anyway. Do not "fix" this by changing the setting.
+
+**What the engine actually is** — `extract_embedding`, `engine.py:336`:
+
+```python
+if features.size < settings.EMBEDDING_DIM:
+    features = np.pad(features, (0, settings.EMBEDDING_DIM - features.size))
+```
+
+Twelve real numbers (skin mean, skin std, hair darkness, three eye bands, brow,
+mouth, beard, symmetry, aspect, luminance), **zero-padded to 320**. That is the
+entire embedding. Not 128D. Not 320D. Twelve numbers and 308 zeros.
+
+**Consequence, and it matters:** nothing is wrong with the *design*. `BiometricEngine`
+exposes `process` / `embed` / `pose` / `similarity` / `is_simulation`, and that
+interface is correct and must be preserved. What is wrong is the implementation
+behind it. A real provider drops in behind the same interface and every caller
+keeps working.
+
+**Also absent: face alignment.** There is no alignment code anywhere in the
+backend. No landmarks, no `estimateAffinePartial2D`, no 68-point or 5-point
+model. `PoseEstimate` (`engine.py:398`) is normalised brightness asymmetry and
+its own docstring says so. Real alignment is a Phase 5 deliverable, not an
+existing feature.
+
+---
+
+## 2. CURRENT HARD FACTS
+
+Verified by running the code at commit `497e7af`. Full detail and reproduction
+commands in [docs/AUDIT.md](docs/AUDIT.md).
+
+| Fact | Value |
+|---|---|
+| Backend tests | **130 passed**, 68s, exit 0 |
+| Frontend typecheck | **passes**, exit 0, strict TS |
+| `npm run docs:check` | **passes**, 29 pages |
+| Endpoints | **47** across 7 routers |
+| Tables | **19**, 4 Alembic migrations |
+| Roles / permissions | **7** / **18** |
+| Default database | **SQLite** (`sqlite:///./traya.db`) |
+| `EMBEDDING_DIM` | **320** (12 real + 308 zeros) |
+| Thresholds | HIGH 0.82, REVIEW 0.62, FALLBACK_FACE 0.60, BOOST 0.05/0.06 |
+| Max impostor similarity | **0.817** — 6 of 30 impostor pairs exceed the 0.62 review threshold |
+| Rows in `face_embeddings` / pgvector | **none** — the column does not exist |
+| RLS policies | **none** — `database/rls.sql` is referenced in a docstring but does not exist |
+| Supabase SDK | **not installed** |
+| Frontend test runner | **none** |
+
+### ML libraries available in `backend\.venv`
+
+| Available | Missing |
+|---|---|
+| `cv2` 5.0.0 (no cascade API) | `dlib`, `face_recognition`, `insightface` |
+| `numpy` 2.5.2, `PIL` 12.3.0 | `onnxruntime`, `mediapipe`, `torch` |
+| `psycopg` 3.3.4 | `supabase`, `pgvector` |
+
+**Only NumPy and Pillow are usable for ML as configured.** Any real 128D
+embedding needs an install first. Phase 5 selects **YuNet** (`cv2.FaceDetectorYN`,
+already available, needs only a model file) plus an **ONNX 128D embedding model**
+via `onnxruntime` — wheel-only, no compiler on Windows. ArcFace-512D would be
+more accurate and is **rejected because the 128D requirement is explicit**; it
+must still be measured and recorded, not dismissed.
+
+### The bugs that will bite you
+
+Ranked in [docs/AUDIT.md](docs/AUDIT.md#bugs-ranked). The five that matter:
+
+1. **The emergency flow 403s and cannot complete.** The backend issues a
+   `session_token` (`emergency.py:180`) and requires it as an
+   `X-TRAYA-Session-Token` header (`emergency.py:57-58`). The frontend has **no
+   `session_token` field in its types** and never sends the header. Step 1
+   returns 200, every step after returns 403. The product does not work.
+2. **The Match Result tab can never render.** `Emergency.tsx:82` passes the
+   result via router `state`; `EmergencyHub.tsx:26` reads `EmergencyContext` and
+   never calls `useLocation()`. `setSession` has zero call sites.
+3. **Logout is reachable inside the emergency UI.** `Layout.tsx:169-181` renders
+   `moreItems` with no `isAuthed` gate, so `logout` appears on `/emergency/*`.
+   One mis-tap during an emergency destroys the session. *This is the reported
+   "emergency logs me out" complaint — there is no automatic logout; this is a
+   reachable button plus `AuthContext` nulling the user on any `/auth/me` failure.*
+4. **19 Tailwind opacity utilities generate no CSS.** Ramp colours are bare
+   `var()` strings with no `<alpha-value>` (`tailwind.config.js:9-31`). The fixed
+   app bar and tab bar have **no background**, so content scrolls visibly under
+   both. Every status badge tint is missing too.
+5. **Consent can never be withdrawn.** `Profile.tsx:177` checks `=== "granted"`;
+   the backend returns `"active"`.
+
+---
+
+## 3. HARD-WON RULES — VIOLATIONS CAUSE BUGS
+
+### Windows / shell
+
+1. PowerShell 5.1. **Never use `&&`.** Use `cmd1; if ($?) { cmd2 }`.
+2. Vite binds `localhost` (IPv6 `::1`); uvicorn binds `127.0.0.1` (IPv4). Probe
+   with an explicit host.
+3. **`uvicorn --reload` spawns orphaned `multiprocessing-fork` workers** that
+   inherit the listening socket and survive parent kills, holding port 8000.
+   `dev-all.mjs` deliberately runs uvicorn **without** `--reload`. To clear a
+   stuck port, kill processes whose commandline matches `uvicorn app.main:app`.
+4. Python is 3.14.2. Use `.venv\Scripts\python.exe`, not bare `python`.
+
+### Code style
+
+5. **Do not add comments to code unless the user asks.**
+6. **No emojis** in code, docs or replies unless the user asks.
+7. **Prefer a composed class** from `@layer components` (`.btn`, `.card`,
+   `.input`, `.badge`, `.tap`, `.eyebrow`, `.scroll-x`) over a long `className`.
+8. **No `dark:*` variants.** Light and dark share one class name via CSS custom
+   properties. `ink-*` / `slate-*` were **removed** — five pages still use them
+   and are migrating.
+9. **`theme.spacing` is `replace`, not `extend`.** `0.5` is 0.125rem, there is
+   no `5.5` and no `13`. Anything outside the table **compiles to nothing** — the
+   same silent failure as an opacity modifier on a ramp colour.
+10. **44px minimum touch targets** via `.tap`. Note `.tap` is currently
+    **purged** because no component uses it; Phase 2 fixes it.
+
+### Frontend architecture
+
+11. **All network calls go through `src/api/client.ts`.** Repo-wide, `fetch(`
+    appears exactly twice, both inside the client. Never add a third outside it.
+12. **Layout routes render `<Outlet />`, not `{children}`.** `App.tsx` wraps
+    pages in `<Route element={<Layout />}>`.
+13. **`EmergencyContext` is a guarded `JSON.parse`** against `sessionStorage`.
+    Keep the guard.
+14. **Every user-visible string is an i18n key.** Five pages still hardcode
+    English (see the gap list in §7).
+
+### Backend architecture
+
+15. **New queries go in `app/repositories/`.** Never in a router or a service.
+16. **Repositories flush but never commit.** The caller owns the transaction, so
+    a domain write and its audit row land together. A repository that commits
+    breaks that invariant.
+17. **New tables or columns require an Alembic migration**
+    (`alembic revision --autogenerate`) **plus a check that the demo seed is
+    still idempotent** on the migrated schema.
+18. **Authentication is `Depends(get_current_user)` plus a permission helper**
+    from `app/security/permissions.py`. Authorization is a data question, not a
+    role-string comparison.
+
+### Testing
+
+19. **`pytest` env vars go at the very top of `tests/conftest.py`, before any
+    `app` import** — `TESTING=1`, `DEMO_MODE=1`, `DATABASE_URL`. The suite uses a
+    fresh temp SQLite DB, removed per run.
+20. **`TestClient.delete()` has no `json=` kwarg.** Use
+    `client.request("DELETE", url, headers=..., json=...)`.
+21. **`pytest.ini` sets `addopts = -q`.** Passing another `-q` yields `-qq`,
+    which suppresses the `N passed` summary. Judge success by `$LASTEXITCODE`,
+    not by the missing summary.
+
+### Biometric determinism
+
+22. **Synthetic face seeds must be deterministic.** The face feature space is
+    small, so arbitrary identity strings collide — observed
+    `unknown-person-X9` vs `test-identity` = 0.807. **Never introduce a
+    random UUID-based identity into enrollment; it made the suite flaky.** The
+    demo no-match identity is `enroll-demo-charlie-99`.
+23. `app/api/demo.py` seeds the demo-enroll face from `user.email`, and
+    `test_demo_enroll_works_with_consent` uses a fixed account. On purpose.
+24. **All demo data is fictional and must stay that way.** No real names,
+    addresses, phone numbers or medical histories. Emails ending `.local` are
+    rejected by pydantic `EmailStr`; demo uses `.demo.traya` / `.responder.traya`.
+
+### Security
+
+25. **Biometric embeddings are encrypted at rest (Fernet) and never returned to
+    clients.** There is no endpoint that returns a vector, and **no agent may add
+    one**. Never log raw vectors. Never log unredacted clinical detail.
+26. **Never log or commit secrets.** `SECRET_KEY` / `ENCRYPTION_KEY` come from
+    `.env`; see `.env.example`.
+27. **`ENCRYPTION_KEY` is derived from `SECRET_KEY` if unset.** Rotating
+    `SECRET_KEY` without setting `ENCRYPTION_KEY` makes every stored embedding
+    **permanently unreadable**. Set both, together, deliberately.
+
+---
+
+## 4. COMMANDS
+
+Run from the repo root unless noted.
 
 | Task | Command |
 |---|---|
-| Run everything (dev) | `npm run dev:all` — backend :8000 + vite :5173; builds frontend once if `dist` missing |
-| Documentation check | `npm run docs:check` (alias: `npm run verify`) |
-| Backend tests | `cd backend; .venv\Scripts\python.exe -m pytest` |
-| Run backend only | `cd backend; .venv\Scripts\python.exe -m uvicorn app.main:app --port 8000` |
-| Run frontend only | `cd frontend; npm run dev` (http://localhost:5173) |
-| Frontend typecheck | `cd frontend; npm run typecheck` (`tsc --noEmit`) |
-| Frontend build | `cd frontend; npm run build` (runs `tsc --noEmit && vite build` → `frontend/dist`) |
+| Run everything (dev) | `npm run dev:all` — backend :8000 + vite :5173 |
+| **Verify docs** | `npm run docs:check` (alias `npm run verify`) |
+| **Backend tests** | `cd backend; .venv\Scripts\python.exe -m pytest` |
+| Backend only | `cd backend; .venv\Scripts\python.exe -m uvicorn app.main:app --port 8000` |
+| Frontend only | `cd frontend; npm run dev` (http://localhost:5173) |
+| Frontend typecheck | `cd frontend; npm run typecheck` |
+| Frontend build | `cd frontend; npm run build` |
 | Migrate to head | `cd backend; .venv\Scripts\python.exe -m alembic upgrade head` |
-| Migration drift check | `cd backend; .venv\Scripts\python.exe -m alembic check` |
+| Migration drift | `cd backend; .venv\Scripts\python.exe -m alembic upgrade head; .venv\Scripts\python.exe -m alembic check` |
 | New migration | `cd backend; .venv\Scripts\python.exe -m alembic revision --autogenerate -m "..."` |
-| Re-seed demo data | `cd backend; .venv\Scripts\python.exe -m app.services.demo.seed` |
+| Re-seed demo | `cd backend; .venv\Scripts\python.exe -m app.services.demo.seed` |
 
-Verification is mandatory after code changes: run the backend test suite for
-backend changes, `npm run build` for frontend changes, and `npm run docs:check`
-for **any** change that adds or renames a component. See
-[the docs contract](docs/README.md#the-documentation-contract).
+### Verification is mandatory
 
-## App URLs
+| Change | Must pass |
+|---|---|
+| Any backend change | backend test suite |
+| Any frontend change | `npm run typecheck` **and** `npm run build` |
+| Adding/renaming a component, endpoint, model, table, migration, setting, role, permission, page, icon, API method or exported type | `npm run docs:check` |
 
-- `http://localhost:5173` — Vite dev server (hot reload, proxies `/api`).
-- `http://localhost:8000` — FastAPI. `/api/*` JSON; it ALSO serves the built
-  frontend from `frontend/dist` at `/` and any non-API path (`main.py` SPA
-  catch-all). Rebuild the frontend to see new UI here.
+**A change is not done until the relevant commands pass.** Report the actual
+result, not an expectation.
 
-## Demo data & accounts
+---
 
-- Demo password for ALL demo accounts: `TrayaDemo#2026`
-- `aarav.kumar@demo.traya`, `priya.sharma@demo.traya`, `rohan.verma@demo.traya`,
-  `meera.iyer@demo.traya` (registered users, enrolled biometrics, medical data)
-- `neha.rao@responder.traya`, `suresh.patil@responder.traya` (responders)
-- `admin@traya.io`, `auditor@traya.io`
-- All demo data is FICTIONAL and must stay that way. Emails ending `.local` are
-  rejected by pydantic EmailStr; demo uses `.demo.traya` / `.responder.traya`.
+## 5. REPO LAYOUT
 
-## Identification engine (critical)
+```
+C:\Traya\
+  AGENTS.md                  this file — read first
+  backend\                   FastAPI + SQLAlchemy + Alembic
+    app\
+      api\                   admin, auth, biometric, demo, emergency, hospitals, users
+      config\                pydantic-settings
+      database\              session + service.py (Supabase probe / SQLite fallback)
+      models\entities.py     19 ORM models
+      repositories\          the only layer that touches the database
+      schemas\               Pydantic schemas
+      security\              auth, password, crypto (Fernet), permissions, rate_limit, tokens
+      services\
+        identification\       engine, pipeline, registry, confidence  ← the core
+        biometric\            enrollment (guided capture lifecycle)
+        demo\                 seed + synthetic image generation
+        medical, notification, location, hospital, audit_service
+      main.py                app factory, lifespan, health, SPA serving
+    migrations\              Alembic (4 versions)
+    tests\                   pytest, 130 tests
+  frontend\
+    src\
+      pages\                 10 pages, all routed
+      components\            Layout, Guards, Sheet, Tabs, StatusBadge, QualityPanel, icons
+      context\               AuthContext, EmergencyContext
+      hooks\                 useCamera, useGeolocation
+      api\                   client.ts (the only network boundary), types.ts
+      i18n\                  strings.ts — 186 keys, en + ta, type-safe
+      theme\                 ThemeProvider
+  docs\                      29 pages — see §6
+  scripts\                   dev-all.mjs, check-docs.mjs
+```
 
-- `opencv-python` 5.x ships no cascade data, so the engine runs in
-  SIMULATION mode. Face detection is simulated; quality gates are real.
-- Embedding = 12 explicit darkness-based features padded to 320 dims.
-- `similarity = clamp(1 - ||a - b|| / 3.0, 0, 1)`.
-- Measured corpus results: clean same-identity 0.986-0.995, degraded
-  same-identity 0.711-0.866, **impostor 0.000-0.817 (mean 0.309)**. 6 of 30
-  impostor pairs exceed the 0.62 review threshold; two identities collide at
-  0.817. Reference point: degraded (noise 0.30 + occlusion 0.30) aarav 0.687.
-- `BIOMETRIC_ENGINE=opencv` does NOT give real detection here - it falls back
-  to the simulator while appearing to take the real path.
-- Thresholds (in DB, seeded): HIGH 0.82, REVIEW 0.62, FALLBACK_FACE 0.60,
-  CONTEXT_BOOST 0.05, SECONDARY_FEATURE_BOOST 0.06. **Seeded DB rows override
-  the env vars**, so editing `.env` on a seeded database does nothing.
-- Statuses: `HIGH_CONFIDENCE`, `REVIEW_REQUIRED`, `LOW_CONFIDENCE`,
-  `NO_MATCH`, `NO_FACE`, `MULTIPLE_FACES`, `POOR_QUALITY`.
+**App URLs:** dev `http://localhost:5173` · API `http://localhost:8000`
+(`/docs` for OpenAPI). The API also serves `frontend/dist` at `/`, so rebuild
+the frontend to see UI changes there.
 
-## Hard-won rules (read these; violations cause flakes/bugs)
+---
 
-1. **Synthetic face seeds must be deterministic.** The face feature space is
-   small, so arbitrary identity strings can collide (observed `unknown-person-X9`
-   vs `test-identity` = 0.807). Demo no-match identity is
-   `enroll-demo-charlie-99` (max 0.436 vs random faces). Never introduce a new
-   random UUID-based identity into enrollment — it made the suite flaky.
-   `app/api/demo.py` seeds the demo-enroll face from `user.email`, and
-   `test_demo_enroll_works_with_consent` uses a fixed account, on purpose.
-2. **Do not add comments to code unless the user asks.**
-3. **No emojis** in code, docs, or replies unless the user asks.
-4. **pytest env vars** (`TESTING=1`, `DEMO_MODE=1`, `DATABASE_URL`) must be set
-   at the very top of `tests/conftest.py`, before any `app` import. The suite
-   uses a fresh temp SQLite DB (`%TEMP%\traya_test.db`), removed per run.
-5. **`TestClient.delete()` has no `json=` kwarg.** Use
-   `client.request("DELETE", url, headers=..., json=...)`.
-6. **`pytest.ini` sets `addopts = -q`.** Passing another `-q` yields `-qq`,
-   which suppresses the `N passed` summary line. Judge success by `$LASTEXITCODE`
-   / dots (no `F`/`E`), not by the missing summary.
-7. **Frontend layout routes render via `<Outlet />`**, not `{children}`. `App.tsx`
-   declares `<Route element={<Layout />}>`; `Layout.tsx` must render
-   `<Outlet />` in `<main>` or every page is blank.
-8. **Windows process hygiene.** `uvicorn --reload` spawns orphaned
-   `multiprocessing-fork` workers (`C:\Python314\python.exe -c spawn_main...`)
-   that inherit the listening socket and survive parent kills, holding port 8000.
-   `dev-all.mjs` deliberately runs uvicorn WITHOUT `--reload`. If the port is
-   stuck, kill processes whose commandline matches `uvicorn app.main:app`.
-9. **Seed idempotency.** `app/services/demo/seed.py` `seed_all(skip_if_seeded=True)`
-   runs at startup and returns immediately when demo data exists, keeping cold
-   boots ~3s (fresh-DB first boot ~7s: one-time biometric render). `seed_biometric`
-   clears stale embeddings before re-enrolling.
-10. **Security.** Biometric embeddings are encrypted at rest (Fernet) and never
-    returned to clients. Never log or commit secrets. `SECRET_KEY`/`ENCRYPTION_KEY`
-    come from `.env` (see `.env.example`).
+## 6. DOCS — READ THE DOC, NOT THE CODE
 
-## Backend conventions
+**`npm run docs:check` fails the build when the docs drift from the code.** This
+is the contract, and it is the reason you should trust `docs/` over your own
+reading of the source.
 
-- FastAPI routers under `app/api/`, registered in `app/api/__init__.py` as
-  `api_router`, mounted at prefix `/api` in `main.py`.
-- Auth via `Depends(get_current_user)` + role helpers in `app/security/auth.py`
-  (`ALL_ROLES`, `ROLE_DESCRIPTIONS`). Rate limiting via `RateLimitMiddleware`.
-- DB access via `SessionLocal`/`get_db`; identification via
-  `app/services/identification/pipeline.py::run_identification`.
-- New queries go in `app/repositories/`, never in a router or a service.
-  Repositories **flush but never commit** - the caller owns the transaction, so
-  a domain write and its audit row land together. A repository that commits
-  breaks that.
-- New tables/columns require an Alembic migration (`alembic revision
-  --autogenerate`) plus a check that the demo seed remains idempotent on the
-  migrated schema.
+Every router endpoint, ORM model, table, migration, repository method, service
+function, settings field, permission, role, page, component, icon, API client
+method and exported TypeScript type **must be named on its owning page.**
 
-## Frontend conventions
+| Page | Covers |
+|---|---|
+| **[docs/AUDIT.md](docs/AUDIT.md)** | **Verified current state, ranked bugs, reusable assets, what I could not verify** |
+| **[docs/TARGET_ARCHITECTURE.md](docs/TARGET_ARCHITECTURE.md)** | **The destination: schema, RLS, API, pipeline, model selection** |
+| **[docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md)** | **13 phases, gates, dependency graph, rollback** |
+| **[docs/NON_TECHNICAL.md](docs/NON_TECHNICAL.md)** | **For reviewers and non-technical readers** |
+| **[docs/MODEL_EVALUATION.md](docs/MODEL_EVALUATION.md)** | **Evaluation protocol; results pending by design** |
+| **[docs/SECURITY_MODEL.md](docs/SECURITY_MODEL.md)** | **Threats, controls, deliberate absences** |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System overview, trust boundaries |
+| [docs/backend/api.md](docs/backend/api.md) | All 47 endpoints |
+| [docs/backend/security.md](docs/backend/security.md) | 7 roles, 18 permissions, tokens, crypto |
+| [docs/backend/data-model.md](docs/backend/data-model.md) | Every table and migration |
+| [docs/backend/services.md](docs/backend/services.md) | Every service module |
+| [docs/backend/repositories.md](docs/backend/repositories.md) | Every repository class and method |
+| [docs/backend/configuration.md](docs/backend/configuration.md) | Every settings field |
+| [docs/frontend/routing.md](docs/frontend/routing.md) | Routes, guards, provider order |
+| [docs/frontend/pages.md](docs/frontend/pages.md) | Every page, with its defects |
+| [docs/frontend/components.md](docs/frontend/components.md) | Every component and icon |
+| [docs/frontend/state-and-data.md](docs/frontend/state-and-data.md) | Contexts, hooks, client, types |
+| [docs/frontend/design-system.md](docs/frontend/design-system.md) | Tokens, spacing, theme, i18n |
+| [docs/operations/README.md](docs/operations/README.md) | Dev, seeding, testing, deploying |
+| [docs/decisions/README.md](docs/decisions/README.md) | ADRs 0001–0006 — why the system is the way it is |
 
-- **Monochrome design system.** Colours are CSS custom properties in
-  `index.css`, mapped as the `ramp` object in `tailwind.config.js`:
-  `canvas`, `surface`, `raised`, `line`, `text`, `muted`, `faint`, `accent`,
-  plus `danger`, `warn`, `ok` and their `-fg` pairs. Light and dark share one
-  class name; there are no `dark:*` variants. `ink-*`/`slate-*` were **removed** -
-  do not reintroduce them.
-- `theme.spacing` is **replaced**, not extended. `0.5` is 0.125rem and there is
-  no `13`. Values outside the table produce nothing - the same silent failure
-  as an opacity modifier on a ramp colour.
-- Prefer a composed class from `@layer components` (`.btn`, `.card`, `.input`,
-  `.badge`, `.tap`, `.eyebrow`, `.scroll-x`) over a long `className`.
-- API calls go through `src/api/client.ts` (`api.*`) using relative `/api`
-  paths; typed responses in `src/api/types.ts`. Auth state in `AuthContext`,
-  emergency flow state in `EmergencyContext` (sessionStorage-backed, with a
-  guarded `JSON.parse`).
-- Mobile-responsive: `grid-cols-1 sm:grid-cols-2` patterns, mobile nav exists
-  in `Layout.tsx`. Tables use `overflow-x-auto`. 44px minimum touch target via
-  `.tap`.
-- Every user-visible string is an i18n key in `src/i18n/strings.ts`. Five
-  pages still hardcode English - see Known gaps.
+### Writing rules
 
-## Documentation
+- **Document the reason, not the obvious.** "Calls the database" is noise.
+  "Never commits implicitly, so the domain write and its audit row share one
+  transaction" prevents a future bug.
+- **Record the sharp edges.** Every page, component and service has at least one
+  behaviour that will surprise a reasonable reader. Write it down.
+- **Never document intent that is not implemented.** If a feature is incomplete
+  or dead code, say so plainly. An aspirational doc is worse than no doc.
+- **Copy names and signatures from source.** When code and docs disagree, the
+  code is right and the doc is a bug.
+- One `# H1` per page, at least one `## H2`, and a breadcrumb to
+  [docs/README.md](docs/README.md).
 
-Documentation is part of the definition of done, not an afterthought.
+---
 
-- `docs/README.md` is the index and states the contract. Read it before adding
-  anything.
-- **Every** router endpoint, ORM model, table, migration, repository method,
-  service function, settings field, permission, role, page, UI component, icon,
-  API client method and exported TypeScript type must be **named on its owning
-  docs page**. Adding a component without adding it to the docs fails
-  `npm run docs:check`, which is wired to `npm run verify`.
-- Write the reason, not the obvious. "Never commits implicitly, so the domain
-  write and its audit row share one transaction" prevents a future bug;
-  "calls the database" is noise.
-- Record the sharp edges. Every page, component and service documented here has
-  at least one behaviour that will surprise a reasonable reader, and it is
-  written down.
-- Never document intent that is not implemented. Where a feature is incomplete
-  or a component is dead code, the docs say so plainly. An aspirational doc is
-  worse than no doc.
-- Copy names, signatures and paths from source. When code and docs disagree,
-  the code is right and the doc is a bug.
-- Keep `# Heading` style, one H1 per page, and the breadcrumb line at the top
-  linking to `docs/README.md`.
+## 7. KNOWN GAPS — DO NOT REDISCOVER
 
-## Known gaps
+Full detail in [docs/README.md](docs/README.md#accuracy-status). The short list:
 
-Documented in full at [docs/README.md](docs/README.md#accuracy-status). The
-short list, so you do not rediscover them:
+1. **The biometric engine is a simulation.** See §1. Recorded in
+   [ADR 0001](docs/decisions/0001-simulation-biometric-engine.md).
+2. **The emergency flow 403s.** The `session_token` is never sent.
+3. **The Match Result tab renders nothing.** Result never reaches the context.
+4. **No RLS, no pgvector, no Supabase SDK, no Storage.** Authorization is
+   Python-only. `database/*.sql` does not exist.
+5. **SQLite is the default database**, and `DatabaseService` **silently falls
+   back** to it when the Postgres probe fails. Real medical data can land in a
+   local file. Removing this is Phase 3, and it is a deliberate behaviour change.
+6. **19 Tailwind opacity utilities emit nothing**; app bar and tab bar have no
+   background.
+7. **Five pages are still on removed `ink-*`/`slate-*`** with hardcoded English:
+   `EmergencyHub`, `Profile`, `Admin`, `Demo`, `Privacy`.
+8. **`Admin` has an invalid role name** (`registered`, not `registered_user`)
+   and omits `hospital`.
+9. **94 of 186 i18n keys are unreferenced.** The whole 25-key `enroll.*`
+   namespace is dead — `Profile` does a file upload instead of guided capture.
+10. **`backend/.env.example` documents 20 of 36 settings.**
+11. **No frontend test runner.** Frontend changes are verified by typecheck and
+    build only.
+12. **Tokens live in `localStorage`** and there is no CSP.
+13. **No face alignment exists.** Nothing in the backend aligns a face.
 
-1. **The biometric engine is a simulation.** Measured impostor similarity
-   0.817, above the 0.62 review threshold. See [ADR 0001](docs/decisions/0001-simulation-biometric-engine.md).
-2. `database/` (`schema.sql`, `indexes.sql`, `rls.sql`, `seed.sql`,
-   `queries/*.sql`) **does not exist**. There is no row-level security;
-   authorization is enforced in Python only.
-3. `EmergencyHub`'s Match Result tab renders nothing, because `Emergency.tsx`
-   never calls `setResult`/`setSession`. `SimulationNotice` is consequently
-   never rendered anywhere.
-4. Tailwind ramp colours have no `<alpha-value>`, so every `/opacity` utility on
-   them (`bg-ok/15`, `bg-surface/95`) silently produces nothing.
-5. `EmergencyHub`, `Profile`, `Admin`, `Demo` and `Privacy` are still on the
-   removed `ink-*`/`slate-*` palette with hardcoded English.
-6. `Admin` has an invalid role name (`registered`, not `registered_user`) and
-   omits `hospital`.
-7. `backend/.env.example` documents 20 of the 36 settings.
-8. There is no frontend test runner.
+---
+
+## 8. WHAT NOT TO DO
+
+1. **Do not claim a feature works unless you ran it and saw it work.**
+2. **Do not present the simulation as a biometric.** Every result already carries
+   `engine_mode` and `demo_mode`; keep that disclosure impossible to miss.
+3. **Do not claim accuracy without a measurement.** Numbers go in
+   [docs/MODEL_EVALUATION.md](docs/MODEL_EVALUATION.md) with the command that
+   produced them. When a result is bad, publish it.
+4. **Do not claim TRAYA is globally unique.** Prior art exists. A formal
+   gap analysis is future work.
+5. **Do not add a "128-bit embedding".** It is **128-dimensional**. A 128D
+   float32 vector is 512 bytes; dimensionality is how many numbers, bit size is
+   how many bits each.
+6. **Do not add an endpoint that returns embeddings.** Ever.
+7. **Do not move thresholds by editing `.env` on a seeded database.** Seeded
+   `system_settings` rows override the env vars, so the edit does nothing.
+8. **Do not add a role check only in React.** Frontend checks hide buttons;
+   RLS decides access.
+9. **Do not hardcode UI strings.** Use an i18n key in both `en` and `ta`.
+10. **Do not write `AI-generated dashboard` aesthetics.** Monochrome, semantic
+    colour only where it carries meaning.
+11. **Do not silently fall back to a local database.**
+12. **Do not rewrite working functionality.** Refactor. The audit lists what is
+    reusable and it is a long list — the pipeline logic, the quality scoring,
+    the permission matrix, the crypto, the API client, the design system and the
+    documentation contract all survive.
+13. **Do not use `&&` in PowerShell.**
+
+---
+
+## 9. WORKING ON A PHASE
+
+1. **Read** the phase in [docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md) and the
+   relevant design in [docs/TARGET_ARCHITECTURE.md](docs/TARGET_ARCHITECTURE.md).
+2. **Check the gate.** Each phase has one. Finish it or revert it — do not merge
+   half a phase.
+3. **Make the smallest change that passes the gate.** Refactor, do not rewrite.
+4. **Run the verification** required by §4. Report the real output.
+5. **Update the docs** in the same change. `npm run docs:check` is not
+   optional.
+6. **Update this file** if a project fact changed — a new dependency, a changed
+   command, a new hard-won rule.
+
+### The three irreversible actions, none of which belong to a phase
+
+1. Deleting the SQLite database.
+2. Turning off the SQLite fallback.
+3. Replacing the biometric engine.
+
+The first two are Phase 3. The third is Phase 5. **Until each phase's gate
+passes, the rollback path is still there.** Preserve it.

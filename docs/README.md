@@ -8,7 +8,11 @@ without breaking its neighbours.
 
 | If you want to... | Read |
 |---|---|
-| Understand the whole system | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| **Understand what exists today, honestly** | **[AUDIT.md](AUDIT.md)** |
+| **Understand where this is going** | **[TARGET_ARCHITECTURE.md](TARGET_ARCHITECTURE.md)** |
+| **Understand the order of work** | **[MIGRATION_PLAN.md](MIGRATION_PLAN.md)** |
+| **Understand it without any technical terms** | **[NON_TECHNICAL.md](NON_TECHNICAL.md)** |
+| Understand the current system in detail | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Call or add an HTTP endpoint | [backend/api.md](backend/api.md) |
 | Understand auth, roles, permissions | [backend/security.md](backend/security.md) |
 | Change a table or add a migration | [backend/data-model.md](backend/data-model.md) |
@@ -27,7 +31,13 @@ without breaking its neighbours.
 
 ```
 docs/
-  ARCHITECTURE.md            system overview, the flows that matter, trust boundaries
+  AUDIT.md                    Phase 1: verified current state, ranked bugs
+  TARGET_ARCHITECTURE.md      Phase 2: the destination design
+  MIGRATION_PLAN.md           Phase 2: 13 phases, gates, rollback
+  MODEL_EVALUATION.md         FAR, FRR, EER, ROC, latency, calibration
+  SECURITY_MODEL.md           Threats, controls, what is deliberately absent
+  NON_TECHNICAL.md            For reviewers, faculty and non-technical readers
+  ARCHITECTURE.md             system overview, the flows that matter, trust boundaries
   backend/
     api.md                   every HTTP endpoint, grouped by router
     security.md              roles, the 18 permissions, session tokens, crypto
@@ -47,7 +57,7 @@ docs/
     README.md                architecture decision records
 ```
 
-19 component references, 6 ADRs, one narrative page.
+29 component references, 6 ADRs, five narrative pages.
 
 ## The documentation contract
 
