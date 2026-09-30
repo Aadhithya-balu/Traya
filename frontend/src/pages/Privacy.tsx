@@ -28,8 +28,8 @@ const PRINCIPLES = [
 export function Privacy() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-14">
-      <h1 className="text-3xl font-bold text-white">Privacy & safety model</h1>
-      <p className="mt-3 text-slate-400">
+      <h1 className="text-3xl font-bold text-text">Privacy & safety model</h1>
+      <p className="mt-3 text-muted">
         TRAYA is built on a simple idea: emergency care needs the minimum necessary
         information, released only to the people who need it, at the moment they need it.
       </p>
@@ -37,39 +37,39 @@ export function Privacy() {
       <div className="mt-8 space-y-4">
         {PRINCIPLES.map((p) => (
           <div key={p.title} className="card">
-            <h2 className="mb-1 font-semibold text-white">{p.title}</h2>
-            <p className="text-sm leading-relaxed text-slate-400">{p.desc}</p>
+            <h2 className="mb-1 font-semibold text-text">{p.title}</h2>
+            <p className="text-sm leading-relaxed text-muted">{p.desc}</p>
           </div>
         ))}
       </div>
 
-      <div className="mt-8 rounded-xl border border-slate-800 bg-ink-800 p-5 text-sm text-slate-400">
-        <h2 className="mb-2 font-semibold text-white">Role-based access</h2>
+      <div className="mt-8 rounded-xl border border-line bg-raised p-5 text-sm text-muted">
+        <h2 className="mb-2 font-semibold text-text">Role-based access</h2>
         <ul className="space-y-1">
           <li>
-            <span className="text-accent-400">Public</span> — can start an emergency session
+            <span className="text-accent">Public</span> — can start an emergency session
             and capture a photo; sees only the match result and a public medical summary.
           </li>
           <li>
-            <span className="text-accent-400">Registered user</span> — their own profile,
+            <span className="text-accent">Registered user</span> — their own profile,
             consents and contact details.
           </li>
           <li>
-            <span className="text-accent-400">Responder</span> — can confirm identities and
+            <span className="text-accent">Responder</span> — can confirm identities and
             view the responder profile (treatment notes, visible features, contacts).
           </li>
           <li>
-            <span className="text-accent-400">Auditor</span> — read-only access to the audit
+            <span className="text-accent">Auditor</span> — read-only access to the audit
             log.
           </li>
           <li>
-            <span className="text-accent-400">Admin</span> — platform configuration, user
+            <span className="text-accent">Admin</span> — platform configuration, user
             management and hospital registry.
           </li>
         </ul>
       </div>
 
-      <p className="mt-6 text-xs text-slate-500">
+      <p className="mt-6 text-xs text-faint">
         This prototype operates exclusively on synthetic demo data. It demonstrates the
         workflows and controls of the production platform.
       </p>

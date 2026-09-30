@@ -226,6 +226,10 @@ class IdentifyOut(BaseModel):
     # not a production biometric and must not be used to identify a real person.
     engine_mode: str = "simulation"
     demo_mode: bool = False
+    # Which build of the engine scored this. Without it a stored score cannot be
+    # traced to the implementation that produced it, and the Phase 5 swap from
+    # the simulation to a real model becomes indistinguishable from a regression.
+    algo_version: str | None = None
 
 
 class ConfirmRequest(BaseModel):

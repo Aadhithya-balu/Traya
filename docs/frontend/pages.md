@@ -18,10 +18,21 @@ covered in [routing.md](routing.md).
 | [`Admin`](#admin) | `/admin` | 5 tabs | **legacy** |
 | [`Privacy`](#privacy) | `/privacy` | none | **legacy** |
 
-**complete** = new design tokens, i18n, layout respects the shell.
-**legacy** = still carries the removed `ink-*`/`slate-*` palette and hardcoded
-English. See [design-system.md](design-system.md#legacy-pages) for what that
-means visually.
+**complete** = design tokens, i18n keys, and layout respects the shell.
+**legacy** = colour is migrated but strings are still hardcoded English.
+Phase 1 moved every page off the removed `ink-*`/`slate-*` palette, so
+**colour is no longer what makes a page legacy** — see
+[design-system.md](design-system.md#the-palette-migration-is-done-the-hardcoded-english-is-not).
+What is left is the i18n work, and on `EmergencyHub` and `Profile` that is
+substantial.
+
+| Page | Colour | Strings | Phase 1 also fixed |
+|---|---|---|---|
+| `EmergencyHub` | done | **hardcoded** | result plumbing, GPS source, engine disclosure |
+| `Profile` | done | **hardcoded** | consent + enrolment vocabulary |
+| `Admin` | done | **hardcoded** | role names |
+| `Demo` | done | **hardcoded** | — |
+| `Privacy` | done | **hardcoded** | invisible headings |
 
 ---
 
@@ -122,25 +133,35 @@ Calls: `api.medicalSummary`, `api.responderProfile` (role-gated),
 `api.timeline`, `api.nearbyHospitals`, `api.sendLocation`, `api.contactAction`,
 `api.confirm`, plus `useGeolocation(false)`.
 
-**Two functional bugs, both worth knowing before you touch this page.**
+**Both functional bugs are fixed. The remaining problem on this page is that it
+is still legacy in every other respect.**
 
-1. **The Match Result tab renders nothing.** It reads `result` from
-   `useEmergency()`, but `Emergency.tsx` only calls `setPreview` - it never calls
-   `setResult` or `setSession`. So `traya_emergency_result` is never written,
-   `result` is always `null`, the tab body is empty, the header badge falls
-   through to `NO_MATCH`, and the confirm-identity button can never appear. The
-   result is passed via router `state` instead, and this page never reads
-   `useLocation().state`. **Fix by calling `setResult` and `setSession` in
-   `Emergency.tsx`** (or by reading the router state here) - the context
-   methods already exist and already persist to `sessionStorage`.
-2. **GPS fixes are logged as `source: "manual"`.** `api.sendLocation` is always
-   called with `"manual"` even when the coordinates came from the geolocation
-   API. The context tier of the match engine trusts `source`, so this makes a
-   GPS-derived boost indistinguishable from a typed-in one in the audit trail.
+1. ~~**The Match Result tab renders nothing.**~~ `Emergency.tsx` now calls
+   `setSession` and `setResult` after `identify`, and navigates without a
+   `state:` argument. The tab body renders and confirm-identity is reachable.
+   Asserted by `test_emergency_result_travels_through_context`.
+2. ~~**GPS fixes are logged as `source: "manual"`.**~~ The page tracks
+   `locSource` as `"gps" | "manual"`, set to `"gps"` by the geolocation effect
+   and to `"manual"` only by `useManualCoords`. Asserted by
+   `test_location_source_is_not_hardcoded_to_manual`.
 
-Also: the page wraps itself in `mx-auto max-w-5xl` while `Layout` already
-constrains `<main>` to `max-w-2xl`, so the two fight. Remove the page-level
-container when migrating.
+**Added in Phase 1: `EngineDisclosure`.** The result section now renders a
+non-dismissible notice above the confidence bar when `engine_mode` is
+`simulation` or `demo`, in the words *"Simulated match — not a biometric"*, with
+the mode and algorithm version. It previously displayed a percentage with
+nothing saying where the number came from, which is the single worst thing this
+page could do. For a real engine it degrades to a one-line provenance note.
+
+Also still true, and worth knowing before you touch this page:
+
+- Every user-visible string is a literal. Five tabs' worth of labels, error
+  strings and confirmations. This is the largest i18n debt in the codebase.
+- The page wraps itself in `mx-auto max-w-5xl` while `Layout` already
+  constrains `<main>` to `max-w-2xl`, so the two fight. Remove the page-level
+  container when migrating.
+- It is the largest file in the frontend at 553 lines and holds three
+  sub-components inline. Phase 9 rewrites it; Phase 2 only migrates the
+  strings.
 
 ## Dashboard
 
@@ -195,7 +216,22 @@ Issues to address when migrating:
   so a value containing a comma cannot be represented.
 - `flash()` uses a bare `setTimeout` with no cleanup, which warns under
   StrictMode if the component unmounts within 3 seconds.
-- Same `"ENROLLED"`/`"granted"` vocabulary mismatch as `Dashboard`.
+
+**Fixed in Phase 1.** Both vocabulary mismatches were real, and both failed
+silently:
+
+- **Consent could never be withdrawn.** The toggle compared against `"granted"`;
+  the API stores `"active"`, so the condition was permanently false and the
+  button always granted. Note the sibling branch in the same function already
+  used `"withdrawn"` — one string in the file was right and one was wrong.
+- **`"ENROLLED"` vs the API's `"enrolled"`.** The badge therefore always read
+  NOT ENROLLED, and the "delete all templates" block — the only way to revoke a
+  biometric — never rendered, for a citizen who had successfully enrolled.
+
+Both fields are now unions (`ConsentStatus`, `BiometricEnrollmentStatus`)
+rather than bare `string`, asserted in
+`test_frontend_contract.py` against `live responses from /users/consents and
+/biometric/status`.
 
 ## Demo
 
@@ -229,30 +265,44 @@ Ten calls: `adminAnalytics`, `adminUsers`, `adminSettings`, `adminHospitals`,
 `adminAudit` on load, then `adminSetRoles`, `adminSetActive`,
 `adminUpdateSetting`, `adminAddHospital`.
 
-Module constant `ROLES = ["registered", "medical_responder", "police_responder",
-"auditor", "admin"]`. **`"registered"` is not a real role** - the actual name is
-`registered_user`, and `hospital` is missing. `RoleAssignmentIn` rejects unknown
-names with 400, so toggling that chip fails server-side. Fix before use.
+**Fixed in Phase 1.** `ROLES` was
+`["registered", "medical_responder", "police_responder", "auditor", "admin"]`.
+`"registered"` is not a role — the seeded name is `registered_user` — so
+`RoleAssignmentIn` rejected it with a 400 and the chip did nothing, while
+`hospital` was missing entirely and could not be provisioned through the UI at
+all. `ROLES` is now typed as `Role[]` and holds all six assignable roles;
+`public` is excluded because it is the implicit role of an unauthenticated
+bystander, not something an admin assigns. Asserted as set equality against
+`ROLE_PERMISSIONS` in both directions, because the original bug was a
+substitution and a subset check would have passed.
 
-Also: data loads per tab and is **never refetched** on re-select, so changes
-made elsewhere go stale; there is no refresh affordance, so a mistyped setting
-can only be corrected by guessing the old value; `api.adminSessions` exists but
-is never called, so there is no session-management screen; and granting or
-revoking `admin` by chip click has no confirmation.
+Still open, and none of it is small:
 
-`fail` is declared after the effect that closes over it. It works only because
-effect bodies run after render, which is fragile - a small refactor would break
-it.
+- Every label, button and error string is a literal.
+- Data loads per tab and is **never refetched** on re-select, so changes made
+  elsewhere go stale.
+- There is no refresh affordance, so a mistyped setting can only be corrected by
+  guessing the old value.
+- `api.adminSessions` exists but is never called, so there is no
+  session-management screen.
+- Granting or revoking `admin` by chip click has no confirmation.
+- `fail` is declared after the effect that closes over it. It works only because
+  effect bodies run after render, which is fragile — a small refactor breaks it.
 
 ## Privacy
 
-`pages/Privacy.tsx` -> `Privacy`. Route: `/privacy`. **Legacy, and the
-worst-styled page in the repository.**
+`pages/Privacy.tsx` -> `Privacy`. Route: `/privacy`. **Legacy.**
 
 Static: six privacy principles (`PRINCIPLES`) plus a role-based-access list and
 a synthetic-data disclaimer. No API calls, no state, no imports beyond React.
 
-It uses `text-white` on the now-light canvas, so its headings are effectively
-invisible, and `text-accent-400` five times, a token that no longer exists. The
-`privacy.title` i18n key exists and is never used. This page should be
-rewritten, not restyled.
+The colour problem is fixed — it used `text-white` on the light canvas and
+`text-accent-400` five times, neither of which resolved, so its headings were
+effectively invisible. What remains is worse than styling: **every string is a
+hardcoded literal, including the `privacy.title` i18n key that exists and is
+never used**, and the page states the project's privacy principles without a
+single one of them coming from the i18n catalogue. For a page whose entire
+content is claims about data handling, that is the wrong place to leave English
+literals in the source.
+
+This page should be rewritten, not restyled.

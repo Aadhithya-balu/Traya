@@ -6,25 +6,32 @@
 // a neutral on a light-to-dark ramp, so identity and status read without
 // decoration. Colours are emitted as CSS custom properties (see index.css) so
 // light and dark share one set of class names.
-const ramp = {
-  canvas: "var(--c-canvas)",
-  surface: "var(--c-surface)",
-  raised: "var(--c-raised)",
-  line: "var(--c-line)",
-  "line-strong": "var(--c-line-strong)",
-  text: "var(--c-text)",
-  muted: "var(--c-muted)",
-  faint: "var(--c-faint)",
-  accent: "var(--c-accent)",
-  "accent-text": "var(--c-accent-text)",
-  "accent-fg": "var(--c-accent-fg)",
-  danger: "var(--c-danger)",
-  "danger-fg": "var(--c-danger-fg)",
-  warn: "var(--c-warn)",
-  "warn-fg": "var(--c-warn-fg)",
-  ok: "var(--c-ok)",
-  "ok-fg": "var(--c-ok-fg)",
-};
+// The `<alpha-value>` placeholder is mandatory. Without it Tailwind cannot
+// build `bg-danger/10` or `border-warn/30`, and because the value is a valid
+// colour string the build still succeeds - the utility is just silently absent
+// from the stylesheet. That is how the app bar, the tab bar and every status
+// badge tint ended up with no background at all.
+const ramp = Object.fromEntries(
+  [
+    "canvas",
+    "surface",
+    "raised",
+    "line",
+    "line-strong",
+    "text",
+    "muted",
+    "faint",
+    "accent",
+    "accent-text",
+    "accent-fg",
+    "danger",
+    "danger-fg",
+    "warn",
+    "warn-fg",
+    "ok",
+    "ok-fg",
+  ].map((name) => [name, `rgb(var(--c-${name}-rgb) / <alpha-value>)`]),
+);
 
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],

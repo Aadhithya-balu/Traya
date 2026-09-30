@@ -560,6 +560,13 @@ class BiometricEngine:
 
     mode: str
 
+    #: Identifies the scoring implementation, independently of how it was
+    #: reached. Bump this whenever the feature extraction or the comparison
+    #: changes, because a stored embedding is only comparable against an
+    #: embedding produced by the same version. Phase 5 introduces a real
+    #: detector and embedder and gets a new version string, not a new `mode`.
+    algo_version: str = "sim-brightness-1"
+
     def __init__(self) -> None:
         if settings.BIOMETRIC_ENGINE == "simulation":
             self.mode = "simulation"

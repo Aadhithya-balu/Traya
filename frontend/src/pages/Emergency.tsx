@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { ApiError, api } from "../api/client";
-import type { Quality } from "../api/types";
+import type { QualityScores } from "../api/types";
 import { QualityPanel } from "../components/QualityPanel";
 import { AlertIcon, CameraIcon, PulseIcon } from "../components/icons";
 import { useEmergency } from "../context/EmergencyContext";
@@ -15,17 +15,32 @@ export function Emergency() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const camera = useCamera();
-  const { setPreview } = useEmergency();
+  const { setPreview, setResult, setSession } = useEmergency();
 
   const [stage, setStage] = useState<Stage>("intro");
   const [imageB64, setImageB64] = useState<string | null>(null);
-  const [quality, setQuality] = useState<Quality | null>(null);
+  const [quality, setQuality] = useState<QualityScores | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   // Leaving the flow must release the camera, or the browser indicator stays on.
   useEffect(() => () => camera.stop(), [camera.stop]);
+
+  /**
+   * A transport failure is not "you have been logged out" and not "no match".
+   * The distinction matters: a person in an emergency needs to be told the
+   * server could not be reached so they can move somewhere with signal.
+   */
+  function describe(err: unknown): string {
+    if (err instanceof ApiError) {
+      if (err.isNetwork) return t("error.network");
+      if (err.status === 403) return t("error.sessionExpired");
+      return err.detail || t("error.generic");
+    }
+    if (err instanceof TypeError) return t("error.network");
+    return t("error.generic");
+  }
 
   async function openCamera() {
     setError(null);
@@ -65,10 +80,11 @@ export function Emergency() {
     setError(null);
     try {
       // A public session is opened lazily, at the point the photo exists, so
-      // an abandoned attempt does not litter the incident log.
+      // an abandoned attempt does not litter the incident log. startSession also
+      // retains the scoped session credential the later calls require.
       const session = await api.startSession("public");
       const capture = await api.capture(session.session_id, imageB64);
-      setQuality(capture as unknown as Quality);
+      setQuality(capture);
       setPreview(imageB64);
 
       if (!capture.usable_for_matching) {
@@ -79,17 +95,17 @@ export function Emergency() {
 
       setStage("working");
       const result = await api.identify(session.session_id, imageB64);
-      navigate(`/emergency/${session.session_id}`, {
-        state: { result, session_id: session.session_id },
-      });
+
+      // The result travels through EmergencyContext, not router state. It used
+      // to be handed to navigate() as `state`, which the destination page never
+      // read - so the Match Result tab rendered nothing and the responder could
+      // never reach the confirm action. Context also survives a reload of the
+      // hub, which is the state a real user is often in after a redirect.
+      setSession(session.session_id);
+      setResult(result, imageB64);
+      navigate(`/emergency/${session.session_id}`);
     } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.detail
-          : err instanceof TypeError
-            ? t("error.network")
-            : t("error.generic"),
-      );
+      setError(describe(err));
       setStage("review");
     } finally {
       setBusy(false);
@@ -158,7 +174,7 @@ export function Emergency() {
               <div className="h-2/5 w-2/5 rounded-[50%] border-2 border-dashed border-white/60" />
             </div>
             {camera.error && (
-              <div className="absolute inset-x-0 bottom-0 bg-danger/90 p-3 text-center text-sm text-white">
+              <div className="absolute inset-x-0 bottom-0 bg-danger/90 p-3 text-center text-sm text-text">
                 {camera.error}
               </div>
             )}
@@ -241,7 +257,11 @@ export function Emergency() {
       )}
 
       {stage === "working" && (
-        <div className="animate-fade-in py-16 text-center">
+        <div
+          className="animate-fade-in py-16 text-center"
+          role="status"
+          aria-live="polite"
+        >
           <span className="mx-auto flex h-14 w-14 animate-pulse items-center justify-center rounded-full bg-raised">
             <PulseIcon size={26} />
           </span>

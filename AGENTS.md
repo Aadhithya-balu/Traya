@@ -94,7 +94,7 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 
 | Fact | Value |
 |---|---|
-| Backend tests | **130 passed**, 68s, exit 0 |
+| Backend tests | **147 passed**, ~46s, exit 0 |
 | Frontend typecheck | **passes**, exit 0, strict TS |
 | `npm run docs:check` | **passes**, 29 pages |
 | Endpoints | **47** across 7 routers |
@@ -291,7 +291,7 @@ C:\Traya\
         medical, notification, location, hospital, audit_service
       main.py                app factory, lifespan, health, SPA serving
     migrations\              Alembic (4 versions)
-    tests\                   pytest, 130 tests
+    tests\                   pytest, 147 tests
   frontend\
     src\
       pages\                 10 pages, all routed
@@ -364,28 +364,32 @@ method and exported TypeScript type **must be named on its owning page.**
 
 Full detail in [docs/README.md](docs/README.md#accuracy-status). The short list:
 
+**Fixed in Phase 1** — no longer a gap, do not re-report: the emergency flow no
+longer 403s, the Match Result tab renders, Logout is unreachable from
+`/emergency/*`, the `<alpha-value>` fix landed so opacity utilities emit CSS,
+and `ink-*`/`slate-*` are gone from every component. Details in
+[docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md#phase-1) and the Phase 1 outcome
+section of [docs/AUDIT.md](docs/AUDIT.md).
+
 1. **The biometric engine is a simulation.** See §1. Recorded in
    [ADR 0001](docs/decisions/0001-simulation-biometric-engine.md).
-2. **The emergency flow 403s.** The `session_token` is never sent.
-3. **The Match Result tab renders nothing.** Result never reaches the context.
-4. **No RLS, no pgvector, no Supabase SDK, no Storage.** Authorization is
+2. **No RLS, no pgvector, no Supabase SDK, no Storage.** Authorization is
    Python-only. `database/*.sql` does not exist.
-5. **SQLite is the default database**, and `DatabaseService` **silently falls
+3. **SQLite is the default database**, and `DatabaseService` **silently falls
    back** to it when the Postgres probe fails. Real medical data can land in a
    local file. Removing this is Phase 3, and it is a deliberate behaviour change.
-6. **19 Tailwind opacity utilities emit nothing**; app bar and tab bar have no
-   background.
-7. **Five pages are still on removed `ink-*`/`slate-*`** with hardcoded English:
-   `EmergencyHub`, `Profile`, `Admin`, `Demo`, `Privacy`.
-8. **`Admin` has an invalid role name** (`registered`, not `registered_user`)
-   and omits `hospital`.
-9. **94 of 186 i18n keys are unreferenced.** The whole 25-key `enroll.*`
+4. **Five pages still hardcode English**: `EmergencyHub`, `Profile`, `Admin`,
+   `Demo`, `Privacy`. Their colours are migrated; their strings are not.
+5. **94 of 186 i18n keys are unreferenced.** The whole 25-key `enroll.*`
    namespace is dead — `Profile` does a file upload instead of guided capture.
-10. **`backend/.env.example` documents 20 of 36 settings.**
-11. **No frontend test runner.** Frontend changes are verified by typecheck and
-    build only.
-12. **Tokens live in `localStorage`** and there is no CSP.
-13. **No face alignment exists.** Nothing in the backend aligns a face.
+6. **`backend/.env.example` documents 20 of 36 settings.**
+7. **No frontend test runner.** Frontend changes are verified by typecheck and
+   build. `backend/tests/test_frontend_contract.py` exists to catch client/server
+   literal mismatches — put new ones there.
+8. **Tokens live in `localStorage`** and there is no CSP.
+9. **No face alignment exists.** Nothing in the backend aligns a face.
+10. **No browser, camera or E2E run has happened.** The emergency flow is fixed
+    by contract test, not observed working in a hand.
 
 ---
 
@@ -416,6 +420,12 @@ Full detail in [docs/README.md](docs/README.md#accuracy-status). The short list:
     the permission matrix, the crypto, the API client, the design system and the
     documentation contract all survive.
 13. **Do not use `&&` in PowerShell.**
+14. **Do not declare a backend value as a bare `string` on the frontend.** Five
+    of the Phase 1 defects were a wrong literal against a loose type: consent
+    `"granted"` vs `"active"`, role `"registered"` vs `"registered_user"`, status
+    `"ENROLLED"` vs `"enrolled"`, location `"manual"` for a GPS fix. Typecheck
+    passed through all of them. Use the union, and assert it in
+    `backend/tests/test_frontend_contract.py`.
 
 ---
 

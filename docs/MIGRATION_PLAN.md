@@ -57,15 +57,18 @@ UI.
 
 | File | Change |
 | --- | --- |
-| `api/types.ts` | Add `session_token` to `EmergencyStartOut` |
-| `api/client.ts` | Store the session token; send `X-TRAYA-Session-Token` on every session-scoped call; add request timeout + `AbortController`; clear the rejected refresh promise in a `finally` |
-| `pages/Emergency.tsx` | Pass the result through `EmergencyContext`, not router `state` |
-| `pages/EmergencyHub.tsx` | Read from context; stop sending `source:"manual"` unconditionally |
+| `api/types.ts` | Add `session_token` to `EmergencyStartOut`; add `Role`, `ConsentStatus`, `BiometricEnrollmentStatus`, `QualityScores` |
+| `api/client.ts` | Store the session token; send `X-TRAYA-Session-Token` on every session-scoped call; add request timeout + `AbortController`; clear the rejected refresh promise in a `finally`; add `ApiError.isNetwork` |
+| `pages/Emergency.tsx` | Pass the result through `EmergencyContext`, not router `state`; distinguish network failure from rejection |
+| `pages/EmergencyHub.tsx` | Read from context; stop sending `source:"manual"` unconditionally; render the engine disclosure |
 | `components/Layout.tsx` | Do not render `logout`/`admin` on emergency routes |
 | `context/AuthContext.tsx` | Distinguish `loading` from signed-out; do not null the user on a transient failure |
 | `pages/Profile.tsx` | Fix `ENROLLED` -> `enrolled`, `"granted"` -> `"active"` |
 | `pages/Admin.tsx` | `registered` -> `registered_user`; add `hospital` |
 | `context/EmergencyContext.tsx` | Store the session token; clear it when the session ends |
+| `services/identification/engine.py` | Add `algo_version`, so a score is traceable to the engine build |
+| `services/identification/pipeline.py` | Emit `algo_version` on every result |
+| `schemas/__init__.py` | Add `algo_version` to `IdentifyOut`; **restore class indentation** |
 
 ### Gate
 
@@ -76,6 +79,40 @@ UI.
 - A logged-in user who runs a full emergency cycle is still authenticated after
   (this is the regression test from Phase 8, written here).
 - `npm run typecheck` and `npm run build` pass; `npm run docs:check` passes.
+
+### Outcome
+
+**Gate met, with one honest caveat.** `147 passed`, `npm run build` exit 0,
+`npm run docs:check` exit 0.
+
+The new `tests/test_frontend_contract.py` (17 tests) is the mechanism that
+actually closes these bugs. With no frontend test runner, the backend suite is
+the only place that can catch a client/server literal mismatch, so role names,
+consent states, enrolment states and the emergency header are all asserted there
+- against `ROLE_PERMISSIONS` and against live responses, not against a copy.
+
+Three things this phase found that were not in the original list, and all three
+are the same failure shape: **a bare `string` and one wrong comparison.**
+
+1. `IdentifyOut` had lost its class indentation in `app/schemas/__init__.py`, so
+   `quality`, `face_count`, `engine_mode` and `demo_mode` were module-level
+   annotations. **The API had stopped returning them.** The client had already
+   stopped reading `engine_mode`, so no test failed.
+2. `"ENROLLED"` vs the API's `"enrolled"` - a citizen who had enrolled was shown
+   NOT ENROLLED, and the only revoke control never rendered.
+3. A result carried no way to identify which engine produced it. `algo_version`
+   added end to end; without it, Phase 5's engine swap is indistinguishable from
+   a regression.
+
+Also completed here, since it was the same mechanism: the palette migration
+(`ink-*` / `slate-*` -> ramp) and the `<alpha-value>` fix. These were nominally
+Phase 2, but the contract test that catches an off-ramp colour belongs with the
+Phase 1 suite, and the two phases touch the same files.
+
+**Caveat: no browser, no camera, no E2E.** The tests prove the client sends
+`X-TRAYA-Session-Token`, publishes the result through context, and keeps Logout
+off `/emergency/*`. They do not prove a person can complete an identification on
+a phone. Phase 13 is still the only thing that will.
 
 ### Risk
 

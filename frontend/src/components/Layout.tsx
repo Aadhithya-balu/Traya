@@ -57,6 +57,11 @@ export function Layout() {
     (tab) => !tab.requiresAuth || isAuthed,
   );
 
+  // Emergency Mode is a workflow state, not an authentication state, so it must
+  // never offer a way to end the session. Logout used to be reachable from the
+  // menu on /emergency/*: one mis-tap mid-emergency destroyed the login, and the
+  // person using the app could not tell that from being logged out. The session
+  // now survives the whole workflow by construction, and this is the other half.
   const moreItems: Array<{
     to?: string;
     onClick?: () => void;
@@ -64,7 +69,7 @@ export function Layout() {
     icon: typeof HomeIcon;
   }> = [
     { to: "/demo", label: t("nav.demo"), icon: BeakerIcon },
-    ...(hasRole("admin")
+    ...(hasRole("admin") && !onEmergencyFlow
       ? [{ to: "/admin", label: t("nav.admin"), icon: ShieldIcon }]
       : []),
     { to: "/privacy", label: t("nav.privacy"), icon: AlertIcon },
@@ -72,7 +77,10 @@ export function Layout() {
 
   return (
     <div className="min-h-screen bg-canvas">
-      <AppBar onOpenMenu={() => setSheetOpen(true)} />
+      <AppBar
+        onOpenMenu={() => setSheetOpen(true)}
+        hideMenu={onEmergencyFlow}
+      />
 
       <main
         className={[
@@ -159,14 +167,19 @@ export function Layout() {
             >
               <span
                 className={[
-                  "absolute top-0.5 h-6 w-6 rounded-full bg-text transition-transform duration-150",
-                  theme === "dark" ? "translate-x-0.5" : "-translate-x-5.5",
+                  "absolute left-0.5 top-0.5 h-6 w-6 rounded-full bg-text transition-transform duration-150",
+                  // The knob is w-6 (1.5rem) in a w-12 (3rem) track, so the full
+                  // travel is 1.5rem = spacing 6. The old -translate-x-5.5 is not
+                  // in theme.spacing, which is `replace` and not `extend`, so the
+                  // class compiled to nothing and the knob never visibly moved in
+                  // either theme. Only the icon changed.
+                  theme === "dark" ? "translate-x-6" : "translate-x-0",
                 ].join(" ")}
               />
             </button>
           </div>
 
-          {isAuthed && (
+          {isAuthed && !onEmergencyFlow && (
             <>
               <div className="divider my-2" />
               <ListRow
@@ -185,7 +198,13 @@ export function Layout() {
   );
 }
 
-function AppBar({ onOpenMenu }: { onOpenMenu: () => void }) {
+function AppBar({
+  onOpenMenu,
+  hideMenu,
+}: {
+  onOpenMenu: () => void;
+  hideMenu?: boolean;
+}) {
   const { t } = useI18n();
   const { isAuthed } = useAuth();
 
@@ -201,7 +220,9 @@ function AppBar({ onOpenMenu }: { onOpenMenu: () => void }) {
             {t("app.name")}
           </span>
         </Link>
-        {isAuthed ? (
+        {/* Nothing but identity during an emergency: no menu, so no way to end
+            the session by accident. */}
+        {isAuthed && !hideMenu && (
           <button
             type="button"
             onClick={onOpenMenu}
@@ -210,7 +231,8 @@ function AppBar({ onOpenMenu }: { onOpenMenu: () => void }) {
           >
             <MoreIcon size={20} />
           </button>
-        ) : (
+        )}
+        {!isAuthed && (
           <Link to="/login" className="btn btn-ghost px-4 text-sm">
             {t("nav.login")}
           </Link>

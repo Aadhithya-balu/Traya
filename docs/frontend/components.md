@@ -36,28 +36,42 @@ failure looks like a routing bug rather than a shell bug.
 The tab bar is hidden entirely on `/emergency*`, and `<main>` padding switches
 from `pb-tabbar` to `pb-safe` so the camera view gets full height.
 
+**Emergency Mode is now a first-class state of this component.** Two changes in
+Phase 1, both load-bearing:
+
+1. `logout` is rendered only when `isAuthed && !onEmergencyFlow`, and the
+   overflow menu button is suppressed entirely on those routes via
+   `hideMenu`. Previously `logout` was reachable from `/emergency/*`, so one
+   mis-tap mid-emergency destroyed the session. That is the whole of the
+   reported "emergency logs me out" complaint — there is no automatic logout
+   anywhere in the codebase.
+2. The `admin` entry in `moreItems` is gated on the same flag, because
+   navigating to `/admin` mid-emergency is a distraction at best.
+
+Suppressing the menu rather than only the logout row is deliberate: the sheet
+holds the language switch and theme toggle, and changing either mid-emergency
+is a mistake waiting to happen. Asserted by
+`test_logout_is_not_reachable_from_an_emergency_route`.
+
 Defects:
 
 - `TabButton` accepts a `to?: string` prop that is never used; `Layout` passes
   `to=""`. Dead prop - remove it.
-- The theme toggle knob uses `-translate-x-5.5`, which is not in the replaced
-  `theme.spacing` scale, so the class produces nothing and **the knob never
-  visibly moves** in either theme. Only the icon changes. Use a real token such
-  as `-translate-x-4`.
-- `bg-surface/95` and `bg-canvas/90` are dropped by Tailwind because ramp
-  colours are plain `var(...)` strings with no `<alpha-value>` (see
-  [design-system.md](design-system.md#the-opacity-modifier-does-not-work)), so
-  **the tab bar and app bar have no background** - only `backdrop-blur`
-  survives. Add an opaque token or a real background colour.
+- ~~The theme toggle knob never moves.~~ **Fixed in Phase 1.** It used
+  `-translate-x-5.5`, which is not in the replaced `theme.spacing` table, so the
+  class compiled to nothing and only the icon changed. It is now positioned from
+  `left-0.5 top-0.5` and travels `translate-x-0` to `translate-x-6`, which is
+  the exact width of a `w-6` knob inside a `w-12` track.
 
 ## Guards
 
 `components/Guards.tsx` -> `Protected`, `AdminOnly`. Both take `children`.
 See [routing.md](routing.md#guards) for the logic.
 
-Both render a hardcoded English `Loading...` string (not an i18n key) in
-`text-slate-400`, a removed token, so the fallback is nearly invisible in dark
-mode. Replace with `t("common.loading")` in `text-muted`.
+Both render a hardcoded English `Loading...` string (not an i18n key). The
+`text-slate-400` is fixed — migrated to `text-muted` in Phase 1 — so the fallback
+is legible in both themes. The string itself is still Phase 2 work; replace it
+with `t("common.loading")`.
 
 ## Sheet
 
@@ -137,9 +151,11 @@ Two issues:
 - `NO_MATCH`, `NO_FACE` and `MULTIPLE_FACES` **collapse to the same label**, so
   a responder cannot distinguish "nobody is enrolled" from "two people are in
   frame" - and those need opposite responses. Split them.
-- `TONE_CLASS` uses `bg-ok/15`, `bg-warn/15` and `bg-danger/15`, all of which
-  Tailwind **drops** (see [design-system](design-system.md#the-opacity-modifier-does-not-work)).
-  Badges currently render with text colour only and no tint.
+- ~~`TONE_CLASS` uses classes Tailwind drops.~~ **Fixed in Phase 1.** `bg-ok/15`
+  and its siblings were no-ops because the ramp had no `<alpha-value>`; see
+  [design system](design-system.md#every-colour-is-stored-twice-and-the-second-copy-is-load-bearing).
+  Badge tints now render. Asserted by
+  `test_every_opacity_modifier_on_a_ramp_colour_resolves`.
 
 ### ScoreBar
 
@@ -160,12 +176,22 @@ it if the API is ever allowed to return one.
 
 `{ result?: IdentifyResult }`. The simulation banner.
 
-**It is currently dead code - nothing renders it.** The docstring calls it "the
-single most important banner in the product", and per
-[ADR 0001](../decisions/0001-simulation-biometric-engine.md) it should be on
-every result. Wire it into `EmergencyHub`, `Demo` and anywhere else an
-`IdentifyResult` is shown. This is the highest-priority unused component in the
-frontend.
+**Still dead code, and that is now a contradiction rather than an oversight.**
+Phase 1 added a local `EngineDisclosure` inside `EmergencyHub.tsx` rather than
+wiring this component, because the notice had to be positioned above the
+confidence bar and had to be non-dismissible, and that needed page-level
+knowledge this component does not have.
+
+The result is **two implementations of the same disclosure**, one of which is
+the documented, i18n-backed, reusable one. That is a real duplication and the
+duplicate is the uglier of the pair. Phase 2 should consolidate: promote
+`EngineDisclosure` into this component, keep the placement rule, and render it
+in `Demo` too — `Demo` shows an `IdentifyResult` with no disclosure at all,
+which is the same omission in a page a reviewer is far more likely to open
+first.
+
+Per [ADR 0001](../decisions/0001-simulation-biometric-engine.md) the disclosure
+belongs on every result.
 
 ## QualityPanel
 
@@ -173,25 +199,33 @@ frontend.
 
 | Prop | Type |
 |---|---|
-| `quality` | `Quality` |
+| `quality` | `QualityScores` |
 | `usable` | `boolean` (optional) - overrides `quality.usable_for_matching` |
 
 Renders the four real engine scores - blur, lighting, face visibility, occlusion
 - as labelled bars, plus a usable/unusable badge and a bulleted list of
 `quality.reasons`.
 
-**Known type hazard.** `CaptureOut` is a *flat* shape
-(`image_quality_score`, `blur_score`, ...) while `Quality` is what this component
-requires. `Emergency.tsx` bridges them with `as unknown as Quality`, which
-compiles but produces `NaN%` bars at runtime, because every field reads
-`undefined`. If the two shapes ever diverge, nothing catches it.
+**The `NaN` hazard is fixed, and the fix was the type, not the arithmetic.**
+`CaptureOut` is a *flat* shape (`image_quality_score`, `blur_score`, ...) whose
+scores are all nullable, because the backend declares them `float | None = None`
+and a capture can fail before any score exists. `Emergency.tsx` bridged it to
+`Quality` with `as unknown as Quality`, so a null score reached
+`Math.round(null * 100)` and then `width: NaN%` — a silently collapsed meter on
+exactly the images where quality mattered most.
 
-Fix properly by giving the API one nested `quality` object on both
-`CaptureOut` and `IdentifyOut`, and deleting the cast. Until then, do not pass a
-`CaptureOut` to this component without adapting it first.
+The prop is now `QualityScores`, whose scores are nullable, and a local `pct`
+prints `--` and renders a zero-width bar for an absent score. `CaptureOut` and
+`Quality` are both structurally assignable to it.
+The remaining shape mismatch is real and unfixed: the API sends quality **flat**
+on `CaptureOut` and **nested** inside `IdentifyResult.quality`. The component
+now accepts either, which removed the cast, but it did not unify the API. The
+proper fix is one nested `quality` object on both responses, which is a breaking
+API change and belongs with the Phase 3 schema work. Until then, the component
+handles both and `CaptureOut` no longer needs adapting.
 
-Note the badge reuses `bg-ok/15` and `bg-danger/15`, so it loses its tint for
-the same reason the status badges do.
+The badge tints render correctly now — the `<alpha-value>` fix in Phase 1
+resolved the same issue here as in `StatusBadge`.
 
 ## Icons
 

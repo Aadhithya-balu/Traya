@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { api, ApiError } from "../api/client";
-import type { BiometricStatus, Consent, EmergencyContact, MedicalProfile, VisibleFeature } from "../api/types";
+import type {
+BiometricStatus,
+Consent,
+ConsentStatus,
+EmergencyContact,
+MedicalProfile,
+VisibleFeature,
+} from "../api/types";
 import { useAuth } from "../context/AuthContext";
 import { fileToBase64 } from "../hooks/useCamera";
 import { fmtDateTime } from "../utils/format";
@@ -170,11 +177,21 @@ export function Profile() {
     setFeatures((prev) => prev.filter((f) => f.id !== id));
   };
 
-  const toggleConsent = async (type: string, current: string) => {
+  /**
+   * Flips a consent between active and withdrawn.
+   *
+   * The backend persists "active" / "withdrawn" (backend/app/api/users.py:220)
+   * and never "granted". Testing for "granted" here made the condition
+   * permanently false, so the button always granted: consent could be given but
+   * never taken back, and a withdrawal was not merely hidden, it was
+   * impossible. Compare against the real stored value.
+   */
+  const toggleConsent = async (type: string, current: ConsentStatus | undefined) => {
     setBusy(true);
     setError(null);
     try {
-      const updated = current === "granted" ? await api.withdrawConsent(type) : await api.grantConsent(type);
+      const updated =
+        current === "active" ? await api.withdrawConsent(type) : await api.grantConsent(type);
       setConsents((prev) => prev.map((c) => (c.consent_type === type ? updated : c)));
       flash(`Consent ${updated.status}.`);
       if (type === "biometric_enrollment" && updated.status === "withdrawn") setBio(null);
@@ -203,7 +220,7 @@ export function Profile() {
     setError(null);
     try {
       const res = await api.enrollBiometric(enrollImages);
-      setBio({ status: "ENROLLED", num_samples: res.num_samples, algo_version: res.algo_version });
+      setBio({ status: "enrolled", num_samples: res.num_samples, algo_version: res.algo_version });
       setEnrollImages([]);
       flash(`Enrolled with ${res.num_samples} samples.`);
     } catch (err) {
@@ -232,25 +249,25 @@ export function Profile() {
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-10">
-      <h1 className="text-3xl font-bold text-white">Profile</h1>
-      <p className="mt-1 text-sm text-slate-400">
+      <h1 className="text-3xl font-bold text-text">Profile</h1>
+      <p className="mt-1 text-sm text-muted">
         Everything here is used to help identify you and reach your contacts in an emergency.
       </p>
 
       {error && (
-        <div className="mt-4 rounded-lg border border-danger-500/30 bg-danger-500/10 p-3 text-sm text-danger-400">
+        <div className="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
           {error}
         </div>
       )}
       {ok && (
-        <div className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300">
+        <div className="mt-4 rounded-lg border border-ok/30 bg-ok/10 p-3 text-sm text-ok">
           {ok}
         </div>
       )}
 
       <div className="mt-6 space-y-6">
         <form onSubmit={saveProfile} className="card space-y-4">
-          <h2 className="font-semibold text-white">Basic information</h2>
+          <h2 className="font-semibold text-text">Basic information</h2>
           <div>
             <label className="label">Full name</label>
             <input className="input" value={profile.full_name} onChange={(e) => setProfile((p) => ({ ...p, full_name: e.target.value }))} required />
@@ -270,8 +287,8 @@ export function Profile() {
 
         <form onSubmit={saveMedical} className="card space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-white">Medical profile</h2>
-            <span className="badge bg-slate-700 text-slate-400">
+            <h2 className="font-semibold text-text">Medical profile</h2>
+            <span className="badge bg-raised text-muted">
               only critical info is shared with responders
             </span>
           </div>
@@ -305,30 +322,30 @@ export function Profile() {
         </form>
 
         <div className="card">
-          <h2 className="mb-3 font-semibold text-white">Emergency contacts</h2>
+          <h2 className="mb-3 font-semibold text-text">Emergency contacts</h2>
           <form onSubmit={addContact} className="grid gap-3 sm:grid-cols-4">
             <input name="name" className="input" placeholder="Name" required />
             <input name="relation" className="input" placeholder="Relation" />
             <input name="phone" className="input" placeholder="Phone" required />
             <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5 text-sm text-slate-400">
-                <input type="checkbox" name="is_primary" className="accent-accent-500" />
+              <label className="flex items-center gap-1.5 text-sm text-muted">
+                <input type="checkbox" name="is_primary" className="accent-accent" />
                 Primary
               </label>
               <button className="btn-ghost flex-1" disabled={busy}>Add</button>
             </div>
           </form>
           <ul className="mt-4 space-y-2">
-            {contacts.length === 0 && <li className="text-sm text-slate-500">No contacts yet.</li>}
+            {contacts.length === 0 && <li className="text-sm text-faint">No contacts yet.</li>}
             {contacts.map((c) => (
-              <li key={c.id} className="flex items-center justify-between rounded-lg border border-slate-800 bg-ink-900 p-3">
+              <li key={c.id} className="flex items-center justify-between rounded-lg border border-line bg-surface p-3">
                 <div>
-                  <span className="text-sm font-medium text-white">{c.name}</span>
-                  {c.is_primary && <span className="badge ml-2 bg-accent-500/15 text-accent-400">primary</span>}
-                  <span className="ml-2 text-sm text-slate-400">{c.relation}</span>
-                  <p className="text-xs text-slate-500">{c.phone}</p>
+                  <span className="text-sm font-medium text-text">{c.name}</span>
+                  {c.is_primary && <span className="badge ml-2 bg-accent/15 text-accent">primary</span>}
+                  <span className="ml-2 text-sm text-muted">{c.relation}</span>
+                  <p className="text-xs text-faint">{c.phone}</p>
                 </div>
-                <button onClick={() => deleteContact(c.id)} className="btn-ghost !px-2.5 !py-1 text-xs text-danger-400">
+                <button onClick={() => deleteContact(c.id)} className="btn-ghost !px-2.5 !py-1 text-xs text-danger">
                   Remove
                 </button>
               </li>
@@ -337,7 +354,7 @@ export function Profile() {
         </div>
 
         <div className="card">
-          <h2 className="mb-3 font-semibold text-white">Visible identifying features</h2>
+          <h2 className="mb-3 font-semibold text-text">Visible identifying features</h2>
           <form onSubmit={addFeature} className="grid gap-3 sm:grid-cols-4">
             <input name="feature_type" className="input" placeholder="e.g. scar" required />
             <input name="description" className="input" placeholder="Description" required />
@@ -345,15 +362,15 @@ export function Profile() {
             <button className="btn-ghost" disabled={busy}>Add</button>
           </form>
           <ul className="mt-4 space-y-2">
-            {features.length === 0 && <li className="text-sm text-slate-500">No features recorded.</li>}
+            {features.length === 0 && <li className="text-sm text-faint">No features recorded.</li>}
             {features.map((f) => (
-              <li key={f.id} className="flex items-center justify-between rounded-lg border border-slate-800 bg-ink-900 p-3">
+              <li key={f.id} className="flex items-center justify-between rounded-lg border border-line bg-surface p-3">
                 <div className="flex items-center gap-2">
-                  <span className="badge bg-accent-500/15 text-accent-400">{f.feature_type}</span>
-                  <span className="text-sm text-slate-300">{f.description}</span>
-                  {f.body_location && <span className="text-xs text-slate-500">({f.body_location})</span>}
+                  <span className="badge bg-accent/15 text-accent">{f.feature_type}</span>
+                  <span className="text-sm text-muted">{f.description}</span>
+                  {f.body_location && <span className="text-xs text-faint">({f.body_location})</span>}
                 </div>
-                <button onClick={() => deleteFeature(f.id)} className="btn-ghost !px-2.5 !py-1 text-xs text-danger-400">
+                <button onClick={() => deleteFeature(f.id)} className="btn-ghost !px-2.5 !py-1 text-xs text-danger">
                   Remove
                 </button>
               </li>
@@ -362,40 +379,49 @@ export function Profile() {
         </div>
 
         <div className="card space-y-4">
-          <h2 className="font-semibold text-white">Biometric consent</h2>
-          <p className="text-sm text-slate-400">
+          <h2 className="font-semibold text-text">Biometric consent</h2>
+          <p className="text-sm text-muted">
             Face matching is opt-in and fully revocable. Templates are encrypted at rest and never
             returned to clients.
           </p>
-          <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-ink-900 p-4">
+          <div className="flex items-center justify-between rounded-lg border border-line bg-surface p-4">
             <div>
-              <p className="text-sm font-medium text-white">biometric_enrollment</p>
-              <p className="text-xs text-slate-500">Current status: {bioConsent?.status ?? "not set"}</p>
+              <p className="text-sm font-medium text-text">biometric_enrollment</p>
+              <p className="text-xs text-faint">
+                Current status:{" "}
+                {bioConsent ? (
+                  <span className={bioConsent.status === "active" ? "text-ok" : "text-warn"}>
+                    {bioConsent.status}
+                  </span>
+                ) : (
+                  "not recorded"
+                )}
+              </p>
             </div>
             <button
-              onClick={() => toggleConsent("biometric_enrollment", bioConsent?.status ?? "not_granted")}
-              className={bioConsent?.status === "granted" ? "btn-ghost" : "btn-primary"}
+              onClick={() => toggleConsent("biometric_enrollment", bioConsent?.status)}
+              className={bioConsent?.status === "active" ? "btn-ghost" : "btn-primary"}
               disabled={busy}
             >
-              {bioConsent?.status === "granted" ? "Withdraw consent" : "Grant consent"}
+              {bioConsent?.status === "active" ? "Withdraw consent" : "Grant consent"}
             </button>
           </div>
         </div>
 
         <div className="card space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-white">Biometric enrollment</h2>
-            <span className="badge bg-slate-700 text-slate-400">
-              {bio?.status === "ENROLLED" ? `ENROLLED · ${bio.num_samples} samples` : "NOT ENROLLED"}
+            <h2 className="font-semibold text-text">Biometric enrollment</h2>
+            <span className={bio?.status === "enrolled" ? "badge bg-ok/15 text-ok" : "badge bg-raised text-muted"}>
+              {bio?.status === "enrolled" ? `Enrolled · ${bio.num_samples} samples` : "Not enrolled"}
             </span>
           </div>
 
-          {bio?.status === "ENROLLED" && (
-            <div className="rounded-lg border border-slate-800 bg-ink-900 p-4 text-sm">
-              <p className="text-slate-300">
+          {bio?.status === "enrolled" && (
+            <div className="rounded-lg border border-line bg-surface p-4 text-sm">
+              <p className="text-muted">
                 Enrolled {fmtDateTime(bio.enrolled_at)} · algorithm {bio.algo_version ?? "current"}
               </p>
-              <button onClick={deleteBiometric} className="btn-ghost mt-3 !px-3 !py-1.5 text-danger-400" disabled={busy}>
+              <button onClick={deleteBiometric} className="btn-ghost mt-3 !px-3 !py-1.5 text-danger" disabled={busy}>
                 Delete all templates
               </button>
             </div>
@@ -403,11 +429,11 @@ export function Profile() {
 
           <div>
             <label className="label">Sample photos (2–4 front-facing, well-lit)</label>
-            <input type="file" accept="image/jpeg,image/png,image/webp" multiple className="input file:mr-3 file:border-0 file:bg-slate-800 file:px-3 file:py-1.5 file:text-accent-400" onChange={onEnrollFiles} />
+            <input type="file" accept="image/jpeg,image/png,image/webp" multiple className="input file:mr-3 file:border-0 file:bg-raised file:px-3 file:py-1.5 file:text-accent" onChange={onEnrollFiles} />
             {enrollImages.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {enrollImages.map((img, i) => (
-                  <img key={i} src={`data:image/jpeg;base64,${img}`} className="h-16 w-16 rounded-lg border border-slate-700 object-cover" alt="sample" />
+                  <img key={i} src={`data:image/jpeg;base64,${img}`} className="h-16 w-16 rounded-lg border border-line object-cover" alt="sample" />
                 ))}
               </div>
             )}

@@ -17,15 +17,32 @@ export interface TokenResponse {
   user: UserSummary;
 }
 
-export interface Quality {
+/**
+ * The quality fields, with scores nullable.
+ *
+ * `CaptureOut` declares them optional-and-nullable because a capture can fail
+ * before any score is computed. The panel used to receive it through a
+ * `as unknown as Quality` cast, which turned a null into `Math.round(null * 100)`
+ * and then into `width: NaN%` - a silently collapsed meter. Typing the panel
+ * against this shape makes that unrepresentable.
+ */
+export interface QualityScores {
+  image_quality_score: number | null;
+  face_visibility_score: number | null;
+  occlusion_score: number | null;
+  blur_score: number | null;
+  lighting_score: number | null;
+  usable_for_matching: boolean;
+  reasons: string[];
+  reason_codes?: string[];
+}
+
+export interface Quality extends QualityScores {
   image_quality_score: number;
   face_visibility_score: number;
   occlusion_score: number;
   blur_score: number;
   lighting_score: number;
-  usable_for_matching: boolean;
-  reasons: string[];
-  reason_codes?: string[];
 }
 
 export interface Candidate {
@@ -47,23 +64,39 @@ export interface IdentifyResult {
   requires_human_confirmation: boolean;
   medical_alerts_available: boolean;
   quality: Quality | null;
-  face_count: number;
-  /** "simulation" means the demo engine, which is not a production biometric. */
-  engine_mode?: string;
-  demo_mode?: boolean;
+face_count: number;
+/**
+ * Which matcher produced this. "simulation" is the demo engine: twelve
+ * brightness measurements padded to 320 dimensions, compared by euclidean
+ * distance. It does not detect faces and it is not a biometric.
+ */
+engine_mode: string;
+demo_mode: boolean;
+/**
+ * Which build of the engine scored this result. Always present, and required in
+ * the type so a result can never reach a responder without saying where the
+ * number came from.
+ */
+algo_version: string | null;
 }
 
 export interface CaptureOut {
-  session_id: string;
-  image_quality_score?: number | null;
-  face_visibility_score?: number | null;
-  occlusion_score?: number | null;
-  blur_score?: number | null;
-  lighting_score?: number | null;
-  face_count: number;
-  usable_for_matching: boolean;
-  reasons: string[];
-  reason_codes?: string[];
+session_id: string;
+/**
+ * Nullable, not optional. The backend declares every one of these with a `None`
+ * default, so the keys are always present in the JSON and may only be null.
+ * The frontend used `?:`, which is a third state that does not exist on the
+ * wire, and it is what forced the `as unknown as Quality` cast in Emergency.tsx.
+ */
+image_quality_score: number | null;
+face_visibility_score: number | null;
+occlusion_score: number | null;
+blur_score: number | null;
+lighting_score: number | null;
+face_count: number;
+usable_for_matching: boolean;
+reasons: string[];
+reason_codes?: string[];
 }
 
 export interface SessionStatus {
@@ -78,6 +111,22 @@ export interface SessionStatus {
   expires_at: string;
   completed_at?: string | null;
   identified_user_id?: string | null;
+}
+
+/** Response of POST /emergency/start. */
+export interface EmergencyStartOut {
+  session_id: string;
+  session_code: string;
+  /**
+   * Scoped credential for this emergency session. The backend requires it as
+   * `X-TRAYA-Session-Token` on every subsequent session-scoped call; the
+   * session id alone is not authorization. Held in sessionStorage by the API
+   * client and never persisted beyond the tab.
+   */
+  session_token: string;
+  status: string;
+  started_at: string;
+  expires_at: string;
 }
 
 export interface PublicSummary {
@@ -156,16 +205,56 @@ export interface VisibleFeature {
   created_at?: string | null;
 }
 
+/**
+ * The seven roles the backend seeds into `role_permissions`.
+ *
+ * Mirrored here so the admin UI cannot offer a role that grants nothing, which
+ * is exactly what "registered" did. backend/tests/test_rbac_matrix.py asserts
+ * this list still equals ROLE_PERMISSIONS, so adding a role without updating
+ * the type is a failing test rather than a silent no-op in the UI.
+ */
+export type Role =
+  | "public"
+  | "registered_user"
+  | "medical_responder"
+  | "police_responder"
+  | "hospital"
+  | "auditor"
+  | "admin";
+
+/**
+ * The backend's stored consent state.
+ *
+ * It is "active" and "withdrawn" - never "granted". The UI compared against
+ * "granted" for its entire life, so every toggle granted and none could ever
+ * withdraw, and the compiler had nothing to say about it because the field was
+ * a bare `string`. Union the real values so that class of bug is a type error.
+ */
+export type ConsentStatus = "active" | "withdrawn";
+
 export interface Consent {
-  consent_type: string;
-  status: string;
-  version: string;
-  granted_at?: string | null;
-  withdrawn_at?: string | null;
+consent_type: string;
+status: ConsentStatus;
+version: string;
+granted_at?: string | null;
+withdrawn_at?: string | null;
 }
 
+/**
+ * Enrolment state, lowercase.
+ *
+ * The API returns "not_enrolled" / "in_progress" / "enrolled" (api/biometric.py
+ * and services/biometric/enrollment.py). `Profile.tsx` compared against "ENROLLED",
+ * so the badge always read NOT ENROLLED and the delete-templates block never
+ * rendered - a citizen who had successfully enrolled was told they had not.
+ */
+export type BiometricEnrollmentStatus =
+  | "not_enrolled"
+  | "in_progress"
+  | "enrolled";
+
 export interface BiometricStatus {
-  status: string;
+status: BiometricEnrollmentStatus;
   enrolled_at?: string | null;
   num_samples: number;
   algo_version?: string | null;

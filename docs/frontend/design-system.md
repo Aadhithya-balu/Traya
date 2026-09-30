@@ -21,27 +21,31 @@ names - `bg-surface` means the same thing in both themes, and there is no
 
 `darkMode: "class"`, and `.dark` on `<html>` is the switch.
 
-| Token | Role | Light | Dark |
-|---|---|---|---|
-| `--c-canvas` | Page background | `#f6f6f5` | `#0a0a0b` |
-| `--c-surface` | Cards, sheets, bars | `#ffffff` | `#131314` |
-| `--c-raised` | Inputs, secondary fills | `#f0f0ef` | `#1c1c1e` |
-| `--c-line` | Default border | `#e2e2e0` | `#2a2a2d` |
-| `--c-line-strong` | Emphasised border | `#c9c9c6` | `#3d3d41` |
-| `--c-text` | Body text | `#17171a` | `#f2f2f0` |
-| `--c-muted` | Secondary text | `#5c5c63` | `#a1a1a6` |
-| `--c-faint` | Tertiary text, eyebrows | `#8a8a92` | `#6e6e75` |
-| `--c-accent` | Interactive fill | `#17171a` | `#f2f2f0` |
-| `--c-accent-text` | Accent-coloured text | `#17171a` | `#f2f2f0` |
-| `--c-accent-fg` | Text on accent | `#ffffff` | `#0a0a0b` |
-| `--c-danger` | Danger, stop, `no match` | `#b4231f` | `#e5484d` |
-| `--c-danger-fg` | Text on danger | `#ffffff` | `#1a0a0a` |
-| `--c-warn` | Caution, review required | `#8a5a00` | `#f0b429` |
-| `--c-warn-fg` | Text on warn | `#ffffff` | `#1a1200` |
-| `--c-ok` | Success, high confidence | `#1f6b3a` | `#3fa45c` |
-| `--c-ok-fg` | Text on ok | `#ffffff` | `#06180c` |
-| `--safe-top` | Notch inset | `env(safe-area-inset-top)` | same |
-| `--safe-bottom` | Home indicator inset | `env(safe-area-inset-bottom)` | same |
+Every colour row below is **two declarations**: the hex form and the RGB
+channel triplet. The triplet is what Tailwind substitutes an alpha channel
+into, so it is not optional. See "Every colour is stored twice" below.
+
+| Token | Channels | Role | Light | Dark |
+|---|---|---|---|---|
+| `--c-canvas` | `--c-canvas-rgb` | Page background | `#f6f6f5` | `#0a0a0b` |
+| `--c-surface` | `--c-surface-rgb` | Cards, sheets, bars | `#ffffff` | `#131314` |
+| `--c-raised` | `--c-raised-rgb` | Inputs, secondary fills | `#f0f0ef` | `#1c1c1e` |
+| `--c-line` | `--c-line-rgb` | Default border | `#e2e2e0` | `#2a2a2d` |
+| `--c-line-strong` | `--c-line-strong-rgb` | Emphasised border | `#c9c9c6` | `#3d3d41` |
+| `--c-text` | `--c-text-rgb` | Body text | `#17171a` | `#f2f2f0` |
+| `--c-muted` | `--c-muted-rgb` | Secondary text | `#5c5c63` | `#a1a1a6` |
+| `--c-faint` | `--c-faint-rgb` | Tertiary text, eyebrows | `#8a8a92` | `#6e6e75` |
+| `--c-accent` | `--c-accent-rgb` | Interactive fill | `#17171a` | `#f2f2f0` |
+| `--c-accent-text` | `--c-accent-text-rgb` | Accent-coloured text | `#17171a` | `#f2f2f0` |
+| `--c-accent-fg` | `--c-accent-fg-rgb` | Text on accent | `#ffffff` | `#0a0a0b` |
+| `--c-danger` | `--c-danger-rgb` | Danger, stop, `no match` | `#b4231f` | `#e5484d` |
+| `--c-danger-fg` | `--c-danger-fg-rgb` | Text on danger | `#ffffff` | `#1a0a0a` |
+| `--c-warn` | `--c-warn-rgb` | Caution, review required | `#8a5a00` | `#f0b429` |
+| `--c-warn-fg` | `--c-warn-fg-rgb` | Text on warn | `#ffffff` | `#1a1200` |
+| `--c-ok` | `--c-ok-rgb` | Success, high confidence | `#1f6b3a` | `#3fa45c` |
+| `--c-ok-fg` | `--c-ok-fg-rgb` | Text on ok | `#ffffff` | `#06180c` |
+| `--safe-top` | — | Notch inset | `env(safe-area-inset-top)` | same |
+| `--safe-bottom` | — | Home indicator inset | `env(safe-area-inset-bottom)` | same |
 
 Eight neutrals, then exactly three semantic hues. `accent` is
 near-black/near-white, so the "brand" is a high-contrast neutral and the only
@@ -51,40 +55,47 @@ must mean something, so nothing is allowed to be decorative.
 Every `-fg` token exists because a single `accent` value is not always legible
 against itself in both themes.
 
-## The opacity modifier does not work
+## Every colour is stored twice, and the second copy is load-bearing
 
-**`bg-ok/15`, `text-danger/80` and every other `/opacity` utility on a ramp
-colour silently produces nothing.**
+Each ramp token has a hex form and an RGB channel triplet:
 
-The ramp is a bare `var(--c-ok)` with no `<alpha-value>` placeholder, so
-Tailwind cannot append an alpha channel and drops the class. Concretely, in the
-current tree:
-
-| Class | Where | Renders as |
+| Token | Also | Purpose |
 |---|---|---|
-| `bg-ok/15` | `StatusBadge`, `QualityPanel` | no tint |
-| `bg-warn/15` | `StatusBadge` | no tint |
-| `bg-danger/15` | `StatusBadge`, `QualityPanel` | no tint |
-| `bg-surface/95` | `Layout` app bar and tab bar | no background |
-| `bg-canvas/90` | `Layout` | no background |
+| `--c-danger` | `--c-danger-rgb` | hand-written CSS that wants a literal colour |
+| `--c-danger-rgb` | — | `rgb(var(--c-danger-rgb) / <alpha-value>)` in `tailwind.config.js` |
 
-Nothing errors; the classes are simply absent from the stylesheet. The app bar
-and tab bar currently rely on `backdrop-blur` alone over `body`'s `bg-canvas`,
-and the status badges have no background at all.
+**This is what makes `/opacity` work, and it was the single cause of the
+missing backgrounds documented in the audit.** The ramp used to be a bare
+`var(--c-danger)`, which is a valid colour string, so the build succeeded - but
+Tailwind could not synthesise an alpha channel from it and dropped every
+modifier class. `bg-danger/10`, `bg-ok/15`, `border-warn/40` and
+`bg-canvas/90` were all absent from the stylesheet. The fixed app bar and tab bar
+had no background, so page content scrolled visibly underneath both, and every
+status badge tint was missing. Nothing errored, which is why it survived a
+passing typecheck and build.
 
-Two fixes, in order of preference:
+Verified in the current build output:
 
-1. **Add `<alpha-value>` to the ramp** using the `rgb(var(--c-ok) / <alpha-value>)`
-   pattern, which means storing each channel as a separate custom property
-   (`--c-ok-rgb: 31 107 58;`). Correct, but it touches every token.
-2. **Add opaque `*-soft` tokens** - `--c-ok-soft`, `--c-warn-soft`,
-   `--c-danger-soft`, `--c-surface-opaque` - with hand-picked light and dark
-   values, and use those.
+```css
+.bg-danger\/10 { background-color: rgb(var(--c-danger-rgb) / .1) }
+.border-warn\/40 { border-color: rgb(var(--c-warn-rgb) / .4) }
+.bg-canvas\/90 { background-color: rgb(var(--c-canvas-rgb) / .9) }
+```
 
-Option 2 is fewer changes and gives better control over contrast in each theme.
-Until one is done, treat every `/opacity` ramp utility in the codebase as a
-no-op. `check-docs.mjs` cannot catch this, because it is a CSS-generation
-behaviour rather than a missing name.
+Two rules now keep it true. `test_every_opacity_modifier_on_a_ramp_colour_resolves`
+asserts `<alpha-value>` is in the config and that every ramp name has an `-rgb`
+twin in `index.css`. `test_no_component_uses_an_off_ramp_colour` and
+`test_class_strings_do_not_contain_off_ramp_colours` assert no component uses a
+numbered colour outside the ramp, because an unknown class is not an error - it
+is simply missing from the output.
+
+**Adding a colour means adding both lines.** A hex form alone will compile, and
+every opacity modifier on it will be a silent no-op.
+
+The `*-soft` alternative was rejected. Opaque tokens cannot darken or lighten
+with the theme, so they would need a hand-picked light and dark pair per
+semantic state, and a state added later would ship with one theme correct and
+the other wrong.
 
 ## Spacing
 
@@ -263,19 +274,33 @@ Coverage is incomplete by design of the migration, not by accident: the legacy
 pages still hardcode English, and `Privacy` does not even use its `privacy.*`
 keys. The namespaces exist and are populated; the pages have not caught up.
 
-## Legacy pages
+## The palette migration is done; the hardcoded English is not
 
-Five pages still use the removed `ink-*` / `slate-*` palette and hardcoded
-English: `EmergencyHub`, `Profile`, `Admin`, `Demo`, `Privacy`. See
-[pages.md](pages.md) for the per-page defect list. `Privacy` is the worst -
-`text-white` on a light canvas makes its headings invisible, and
-`text-accent-400` no longer exists.
+`ink-*` and `slate-*` were removed from the theme, and six files were still using
+them: `Admin`, `Demo`, `EmergencyHub`, `Privacy`, `Profile`, and `Guards`. Every
+one of those classes was emitting no CSS, so those pages were rendering with no
+card background, no border and no tint anywhere. All of them are now on the
+ramp. Two tests hold the line, and they cover the case a component scan cannot:
 
-`Grep` for the old tokens before assuming a page is migrated:
+```python
+test_no_component_uses_an_off_ramp_colour          # JSX className
+test_class_strings_do_not_contain_off_ramp_colours  # lookup tables in .ts
+```
+
+The second one exists because `utils/format.ts` builds badge tints as strings in
+a data table. Three of those classes were invented and had never rendered.
+
+**Still outstanding: hardcoded English.** `EmergencyHub`, `Profile`, `Admin`,
+`Demo` and `Privacy` still render literal strings rather than i18n keys, and
+`Privacy` does not use its own `privacy.*` namespace. That is Phase 2 work and
+is tracked in [pages.md](pages.md).
+
+To find un-migrated colour usage from the shell, the equivalent of the two tests
+above:
 
 ```powershell
 Select-String -Path src\pages\*.tsx -Pattern 'ink-|slate-|accent-\d|text-white'
 ```
 
-Until that returns nothing for a page, treat it as legacy and do not add new
-features to it - a rewrite is cheaper than a fix.
+Treat a page as colour-migrated when that returns nothing. Do not treat it as
+finished until its strings are keys.

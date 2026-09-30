@@ -9,6 +9,7 @@ import type {
   DemoRun,
   DemoScenario,
   EmergencyContact,
+  EmergencyStartOut,
   HospitalAdmin,
   HospitalNearby,
   IdentifyResult,
@@ -25,6 +26,10 @@ import type {
 
 const ACCESS_KEY = "traya_access";
 const REFRESH_KEY = "traya_refresh";
+const SESSION_TOKEN_KEY = "traya_emergency_token";
+
+/** Identification embeds a model and searches; give it room before assuming a hang. */
+const DEFAULT_TIMEOUT_MS = 30_000;
 
 export function getTokens() {
   return {
@@ -43,69 +48,141 @@ export function clearTokens() {
   localStorage.removeItem(REFRESH_KEY);
 }
 
+/**
+ * Emergency session credential. Session-scoped, never an account credential:
+ * it grants identification of one session and nothing else. Kept in
+ * sessionStorage so closing the tab discards it.
+ */
+let sessionToken: string | null = sessionStorage.getItem(SESSION_TOKEN_KEY);
+
+export function setSessionToken(token: string) {
+  sessionToken = token;
+  sessionStorage.setItem(SESSION_TOKEN_KEY, token);
+}
+
+export function getSessionToken(): string | null {
+  return sessionToken;
+}
+
+export function clearSessionToken() {
+  sessionToken = null;
+  sessionStorage.removeItem(SESSION_TOKEN_KEY);
+}
+
 export class ApiError extends Error {
   status: number;
   detail: string;
-  constructor(status: number, detail: string) {
+  /** True when the request never reached the server (offline, DNS, timeout). */
+  isNetwork: boolean;
+  constructor(status: number, detail: string, isNetwork = false) {
     super(detail);
     this.status = status;
     this.detail = detail;
+    this.isNetwork = isNetwork;
   }
 }
+
+/** Matches `/emergency/{id}/...` so the credential attaches without a call-site change. */
+const EMERGENCY_SCOPE = /^\/emergency\/([A-Za-z0-9-]+)(\/|$)/;
 
 let refreshPromise: Promise<string | null> | null = null;
 
+/**
+ * Single in-flight refresh, shared by concurrent 401s.
+ *
+ * The promise is cleared in a `finally` so a rejected refresh cannot be cached
+ * and rethrown to every later request until a page reload.
+ */
 async function refreshAccessToken(): Promise<string | null> {
-  const refresh = getTokens().refresh;
-  if (!refresh) return null;
-  const res = await fetch("/api/auth/refresh", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refresh_token: refresh }),
-  });
-  if (!res.ok) return null;
-  const data = (await res.json()) as TokenResponse;
-  setTokens(data.access_token, data.refresh_token);
-  return data.access_token;
+  if (!refreshPromise) {
+    refreshPromise = (async () => {
+      const refresh = getTokens().refresh;
+      if (!refresh) return null;
+      const res = await fetch("/api/auth/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+      if (!res.ok) return null;
+      const data = (await res.json()) as TokenResponse;
+      setTokens(data.access_token, data.refresh_token);
+      return data.access_token;
+    })().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
 }
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+interface RequestOptions extends RequestInit {
+  /** Per-request budget; falls back to DEFAULT_TIMEOUT_MS. */
+  timeoutMs?: number;
+}
+
+async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal, ...init } = options;
+
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(signal?.reason);
+  if (signal) {
+    if (signal.aborted) controller.abort(signal.reason);
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+  const timer = setTimeout(() => controller.abort(new Error("timeout")), timeoutMs);
+
+  const emergency = EMERGENCY_SCOPE.exec(path);
+
   const attempt = async (token?: string): Promise<Response> => {
     const headers: Record<string, string> = {
-      ...((options.headers as Record<string, string>) || {}),
+      ...((init.headers as Record<string, string>) || {}),
     };
     if (token) headers["Authorization"] = `Bearer ${token}`;
-    return fetch(`/api${path}`, { ...options, headers });
+    if (emergency && sessionToken) headers["X-TRAYA-Session-Token"] = sessionToken;
+    return fetch(`/api${path}`, { ...init, headers, signal: controller.signal });
   };
 
-  let res = await attempt(getTokens().access ?? undefined);
+  try {
+    let res = await attempt(getTokens().access ?? undefined);
 
-  if (res.status === 401 && !path.startsWith("/auth/login") && !path.startsWith("/auth/refresh")) {
-    refreshPromise = refreshPromise ?? refreshAccessToken();
-    const newToken = await refreshPromise;
-    refreshPromise = null;
-    if (newToken) {
-      res = await attempt(newToken);
+    if (
+      res.status === 401 &&
+      !path.startsWith("/auth/login") &&
+      !path.startsWith("/auth/refresh")
+    ) {
+      const newToken = await refreshAccessToken();
+      if (newToken) res = await attempt(newToken);
     }
-  }
 
-  if (res.status === 204) return undefined as T;
+    if (res.status === 204) return undefined as T;
 
-  const contentType = res.headers.get("content-type") || "";
-  let body: unknown = null;
-  if (contentType.includes("application/json")) {
-    body = await res.json();
-  }
+    const contentType = res.headers.get("content-type") || "";
+    let body: unknown = null;
+    if (contentType.includes("application/json")) {
+      body = await res.json();
+    }
 
-  if (!res.ok) {
-    const detail =
-      body && typeof body === "object" && "detail" in body
-        ? String((body as { detail: unknown }).detail)
-        : res.statusText;
-    throw new ApiError(res.status, detail);
+    if (!res.ok) {
+      const detail =
+        body && typeof body === "object" && "detail" in body
+          ? String((body as { detail: unknown }).detail)
+          : res.statusText;
+      throw new ApiError(res.status, detail);
+    }
+    return body as T;
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    if (signal?.aborted) throw new ApiError(0, "Request cancelled", true);
+    if (controller.signal.aborted) {
+      throw new ApiError(0, "The server took too long to respond", true);
+    }
+    throw new ApiError(0, "Cannot reach the server", true);
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener("abort", onAbort);
   }
-  return body as T;
 }
+
 
 export const api = {
   // auth
@@ -130,11 +207,20 @@ export const api = {
   me: () => request<UserSummary>("/auth/me"),
 
   // emergency (public)
-  startSession: (accessType = "public") =>
-    request<{ session_id: string; session_code: string; status: string; started_at: string; expires_at: string }>(
-      "/emergency/start",
-      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ access_type: accessType }) },
-    ),
+  /**
+   * Starts a public emergency session and retains its scoped credential.
+   * Every later `/emergency/{id}/...` call re-attaches it, so the caller never
+   * handles it directly.
+   */
+  startSession: async (accessType = "public") => {
+    const out = await request<EmergencyStartOut>("/emergency/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_type: accessType }),
+    });
+    if (out.session_token) setSessionToken(out.session_token);
+    return out;
+  },
   sessionStatus: (sessionId: string) => request<SessionStatus>(`/emergency/${sessionId}`),
   capture: (sessionId: string, image: string) =>
     request<CaptureOut>(`/emergency/${sessionId}/capture`, {
@@ -146,6 +232,10 @@ export const api = {
     request<IdentifyResult>(`/emergency/${sessionId}/identify`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      // Embedding plus a search over every enrolled profile; the slowest
+      // call the app makes. Generous budget, but bounded so the UI can
+      // recover instead of spinning forever.
+      timeoutMs: 45_000,
       body: JSON.stringify({
         image,
         secondary_features: secondaryFeatures,

@@ -6,7 +6,7 @@ export function Protected({ children }: { children: ReactNode }) {
   const { isAuthed, loading } = useAuth();
   if (loading) {
     return (
-      <div className="flex min-h-[50vh] items-center justify-center text-slate-400">
+      <div className="flex min-h-[50vh] items-center justify-center text-muted">
         Loading…
       </div>
     );
@@ -19,7 +19,7 @@ export function AdminOnly({ children }: { children: ReactNode }) {
   const { isAuthed, loading, hasRole } = useAuth();
   if (loading) {
     return (
-      <div className="flex min-h-[50vh] items-center justify-center text-slate-400">
+      <div className="flex min-h-[50vh] items-center justify-center text-muted">
         Loading…
       </div>
     );

@@ -1,6 +1,13 @@
-import type { Quality } from "../api/types";
+import type { QualityScores } from "../api/types";
 import { useI18n } from "../i18n";
 import { AlertIcon, CheckIcon } from "./icons";
+
+/** An absent score renders as an empty meter, never as NaN. */
+function pct(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.round(value * 100)
+    : null;
+}
 
 /**
  * Quality read-out.
@@ -13,7 +20,7 @@ export function QualityPanel({
   quality,
   usable,
 }: {
-  quality: Quality;
+  quality: QualityScores;
   usable?: boolean;
 }) {
   const { t } = useI18n();
@@ -54,25 +61,28 @@ export function QualityPanel({
       </div>
 
       <dl className="mt-4 space-y-3">
-        {rows.map((row) => (
-          <div key={row.key}>
-            <div className="flex items-baseline justify-between text-xs">
-              <dt className="text-muted">{row.label}</dt>
-              <dd className="font-mono text-faint">
-                {Math.round(row.value * 100)}%
-              </dd>
+        {rows.map((row) => {
+          const value = pct(row.value);
+          return (
+            <div key={row.key}>
+              <div className="flex items-baseline justify-between text-xs">
+                <dt className="text-muted">{row.label}</dt>
+                <dd className="font-mono text-faint">
+                  {value === null ? "--" : `${value}%`}
+                </dd>
+              </div>
+              <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-raised">
+                <div
+                  className={[
+                    "h-full rounded-full transition-[width] duration-300",
+                    value !== null && value >= 50 ? "bg-text" : "bg-warn",
+                  ].join(" ")}
+                  style={{ width: `${value ?? 0}%` }}
+                />
+              </div>
             </div>
-            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-raised">
-              <div
-                className={[
-                  "h-full rounded-full transition-[width] duration-300",
-                  row.value >= 0.5 ? "bg-text" : "bg-warn",
-                ].join(" ")}
-                style={{ width: `${Math.round(row.value * 100)}%` }}
-              />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </dl>
 
       {quality.reasons?.length ? (

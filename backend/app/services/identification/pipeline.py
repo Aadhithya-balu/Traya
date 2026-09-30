@@ -60,6 +60,7 @@ class PipelineResult:
         self.face_count = 0
 
     def to_dict(self, session_id: str) -> dict:
+        engine = get_engine()
         return {
             "session_id": session_id,
             "status": self.status,
@@ -76,8 +77,15 @@ class PipelineResult:
             # heuristic over synthetic-style renders, not a trained biometric,
             # and it produces false accepts against similar faces. A consumer
             # must be able to see that without reading the logs.
-            "engine_mode": get_engine().mode,
+            "engine_mode": engine.mode,
             "demo_mode": settings.DEMO_MODE,
+            # Which build of the engine produced this number. Phase 5 replaces
+            # the simulation with YuNet plus an ONNX embedding model, and a
+            # score is uninterpretable without knowing which of the two it came
+            # from - so the version travels with the result rather than living
+            # only in the server logs where nobody reading the response can see
+            # it.
+            "algo_version": engine.algo_version,
         }
 
 

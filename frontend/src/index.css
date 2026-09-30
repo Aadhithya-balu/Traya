@@ -3,28 +3,61 @@
 @tailwind utilities;
 
 @layer base {
+  /* ---------------------------------------------------------------------
+     Colours are stored twice, on purpose.
+
+     The hex form is for hand-written CSS that wants a literal colour. The
+     space-separated RGB channel triplets exist for Tailwind, which can only
+     synthesise an opacity modifier (bg-danger/10) if the colour value contains
+     the literal placeholder `<alpha-value>`. A bare `var(--c-danger)` is opaque
+     to that mechanism, so every opacity modifier in the codebase compiled to
+     *no CSS at all* - silently, with no warning, which left the app bar and
+     the tab bar with no background and every status badge tint missing.
+     See docs/frontend/design-system.md.
+
+     Adding a colour means adding both lines. The test in
+     backend/tests/test_frontend_contract.py fails if a utility name is used
+     that the ramp does not define.
+     --------------------------------------------------------------------- */
   :root {
     color-scheme: light;
 
     --c-canvas: #f6f6f5;
+    --c-canvas-rgb: 246 246 245;
     --c-surface: #ffffff;
+    --c-surface-rgb: 255 255 255;
     --c-raised: #f0f0ef;
+    --c-raised-rgb: 240 240 239;
     --c-line: #e2e2e0;
+    --c-line-rgb: 226 226 224;
     --c-line-strong: #c9c9c6;
+    --c-line-strong-rgb: 201 201 198;
     --c-text: #17171a;
+    --c-text-rgb: 23 23 26;
     --c-muted: #5c5c63;
+    --c-muted-rgb: 92 92 99;
     --c-faint: #8a8a92;
+    --c-faint-rgb: 138 138 146;
 
     --c-accent: #17171a;
+    --c-accent-rgb: 23 23 26;
     --c-accent-text: #17171a;
+    --c-accent-text-rgb: 23 23 26;
     --c-accent-fg: #ffffff;
+    --c-accent-fg-rgb: 255 255 255;
 
     --c-danger: #b4231f;
+    --c-danger-rgb: 180 35 31;
     --c-danger-fg: #ffffff;
+    --c-danger-fg-rgb: 255 255 255;
     --c-warn: #8a5a00;
+    --c-warn-rgb: 138 90 0;
     --c-warn-fg: #ffffff;
+    --c-warn-fg-rgb: 255 255 255;
     --c-ok: #1f6b3a;
+    --c-ok-rgb: 31 107 58;
     --c-ok-fg: #ffffff;
+    --c-ok-fg-rgb: 255 255 255;
 
     --safe-top: env(safe-area-inset-top, 0px);
     --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -34,24 +67,41 @@
     color-scheme: dark;
 
     --c-canvas: #0a0a0b;
+    --c-canvas-rgb: 10 10 11;
     --c-surface: #131314;
+    --c-surface-rgb: 19 19 20;
     --c-raised: #1c1c1e;
+    --c-raised-rgb: 28 28 30;
     --c-line: #2a2a2d;
+    --c-line-rgb: 42 42 45;
     --c-line-strong: #3d3d41;
+    --c-line-strong-rgb: 61 61 65;
     --c-text: #f2f2f0;
+    --c-text-rgb: 242 242 240;
     --c-muted: #a1a1a6;
+    --c-muted-rgb: 161 161 166;
     --c-faint: #6e6e75;
+    --c-faint-rgb: 110 110 117;
 
     --c-accent: #f2f2f0;
+    --c-accent-rgb: 242 242 240;
     --c-accent-text: #f2f2f0;
+    --c-accent-text-rgb: 242 242 240;
     --c-accent-fg: #0a0a0b;
+    --c-accent-fg-rgb: 10 10 11;
 
     --c-danger: #e5484d;
+    --c-danger-rgb: 229 72 77;
     --c-danger-fg: #1a0a0a;
+    --c-danger-fg-rgb: 26 10 10;
     --c-warn: #f0b429;
+    --c-warn-rgb: 240 180 41;
     --c-warn-fg: #1a1200;
+    --c-warn-fg-rgb: 26 18 0;
     --c-ok: #3fa45c;
+    --c-ok-rgb: 63 164 92;
     --c-ok-fg: #06180c;
+    --c-ok-fg-rgb: 6 24 12;
   }
 
   * {
@@ -79,6 +129,13 @@
   ::selection {
     background: var(--c-text);
     color: var(--c-canvas);
+  }
+
+  /* Light and dark share one class name via these custom properties, so there
+     are no `dark:` variants anywhere in the components. These two are the only
+     place the mode is consulted. */
+  .dark {
+    color-scheme: dark;
   }
 }
 

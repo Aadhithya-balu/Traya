@@ -48,7 +48,12 @@ Measured, not assumed. Run to reproduce:
 cd backend; .venv\Scripts\python.exe -m pytest
 ```
 
-    130 passed, 8 warnings in 68.47s   EXITCODE=0
+    146 passed, 8 warnings in 43.36s   EXITCODE=0
+
+> **Superseded, 2026-09-30.** The audit recorded 130 passing tests. Phase 1 adds
+> `tests/test_frontend_contract.py` (16 tests) and the count is now 146. The
+> numbers above are the state at commit `497e7af` and the rest of this page
+> describes that state. See the phase notes at the end for what has changed.
 
 ML library availability in `backend\.venv`:
 
@@ -505,3 +510,86 @@ Stated plainly, per the documentation contract.
   Supabase.
 - **No frontend runtime was executed.** No browser, no camera, no E2E. All
   frontend findings are static analysis plus a Tailwind compile cross-check.
+  This is still true after Phase 1: the emergency flow was fixed by reading the
+  code and by asserting on the API contract, **not** by driving a phone through
+  an identification. The contract tests prove the client sends the header and
+  reads the fields; they do not prove a person can complete a session. Treat
+  every Phase 1 frontend claim as unverified until someone runs the app.
+
+---
+
+## Phase 1 outcome: the emergency flow was broken end to end
+
+The audit found the product did not work. Phase 1 fixed that and added the tests
+that stop it regressing. **Every claim below is backed by a passing test.**
+
+The five bugs that mattered, and what happened to each:
+
+| # | Bug | Status | Evidence |
+| --- | --- | --- | --- |
+| 1 | Emergency flow 403s from step 2 | **Fixed** | `test_client_attaches_the_emergency_session_header`, `test_start_session_retains_the_credential` |
+| 2 | Match Result tab renders nothing | **Fixed** | `test_emergency_result_travels_through_context` |
+| 3 | Logout reachable inside the emergency UI | **Fixed** | `test_logout_is_not_reachable_from_an_emergency_route` |
+| 4 | 19 opacity utilities emit no CSS | **Fixed** | `test_every_opacity_modifier_on_a_ramp_colour_resolves` |
+| 5 | Consent can never be withdrawn | **Fixed** | `test_consent_status_union_matches_the_api` |
+
+### The single most important thing learned
+
+**Three of the five were a literal that had drifted from the value the API
+returns, and the types were too loose to notice.**
+
+- consent was compared against `"granted"`; the API stores `"active"`
+- the admin role list offered `"registered"`; the seeded role is `registered_user`
+- a real GPS fix was reported as `"manual"`
+
+Every one of them failed **silently and plausibly**. Consent withdrawal was not
+hidden, it was *impossible* - the button always granted. The role toggle looked
+like it worked and granted nothing. The location was recorded with the wrong
+provenance, which quietly corrupts the evidence trail an incident review reads.
+
+The fix is not the three edits. It is that `Consent.status` was `string` and
+`ROLES` was `string[]`, so TypeScript had no opinion about any of it. Those are
+now `ConsentStatus`, `Role` and `QualityScores` unions, and
+`test_frontend_contract.py` asserts them against the backend's real values.
+
+**The generalisable rule: with no frontend test runner, the backend suite is the
+only thing that can catch a client/server literal mismatch. That is why these
+16 tests live in `backend/tests/`, not in a place a future agent would expect
+them.** It is an unusual place for a test about `frontend/src`, and the module
+docstring says so.
+
+### Things I found while fixing the above, which were not on the list
+
+- **`app/schemas/__init__.py` had lost its indentation.** The `IdentifyOut`
+  fields `quality`, `face_count`, `engine_mode` and `demo_mode` were at module
+  level, not inside the class, so **the API had silently stopped returning them
+  for some time.** The client had already stopped reading `engine_mode`, so
+  nothing failed. A 128D-real-engine project cannot afford a response model that
+  quietly drops half its fields.
+- **A result could not be traced to the engine that produced it.** Added
+  `algo_version` to `BiometricEngine` (`sim-brightness-1`), threaded through the
+  pipeline and onto every response. When Phase 5 swaps the simulation for YuNet
+  plus an ONNX embedder, a score without this field is uninterpretable, and the
+  swap would be indistinguishable from a regression.
+- **The result screen never disclosed the simulation.** `engine_mode` and
+  `demo_mode` reached the client and were dropped on the floor. There is now a
+  non-dismissible notice above the confidence bar, present even on the
+  multi-face rejection path, which returns before any scoring happens.
+- **Six files used the removed `ink-*` / `slate-*` palette.** All of it emitted
+  no CSS, so `Admin`, `Demo`, `EmergencyHub`, `Privacy`, `Profile` and `Guards`
+  were rendering with no card backgrounds, no borders and no badge tints.
+  Migrated to the ramp.
+- **`theme.spacing` is `replace`, so `mt-5.5` is a silent no-op** for the same
+  reason. Now asserted.
+- `EmergencyHub` sent `"manual"` as the location source for every fix,
+  including real GPS. The pipeline treats a GPS fix and a typed estimate as
+  different evidence.
+
+### Still not verified
+
+Stated again because it is the important caveat on this whole section: no
+browser, no camera, no E2E. The contract tests prove the client sends
+`X-TRAYA-Session-Token`, publishes the result through context, and keeps the
+Logout button off `/emergency/*`. **They do not prove a person can complete an
+identification on a phone.** Phase 1's gate is met; the product in a hand is
+not yet proven.

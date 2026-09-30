@@ -136,10 +136,14 @@ do what you would assume. They are documented as they are, not as intended:
 |---|---|
 | `database/` SQL and RLS assets do not exist | [operations](operations/README.md#sql-assets) |
 | No row-level security; authorization is Python-only | [architecture](ARCHITECTURE.md#database) |
-| The Match Result tab renders nothing | [pages](frontend/pages.md#emergencyhub) |
 | `SimulationNotice` is never rendered | [components](frontend/components.md#simulationnotice) |
-| Tailwind opacity modifiers on ramp colours are no-ops | [design system](frontend/design-system.md#the-opacity-modifier-does-not-work) |
-| Five pages are still on the removed palette | [design system](frontend/design-system.md#legacy-pages) |
-| `Admin` has an invalid role name and no hospital role | [pages](frontend/pages.md#admin) |
+| Five pages still hardcode English | [pages](frontend/pages.md#legacy-pages) |
 | `.env.example` covers 20 of 36 settings | [operations](operations/README.md#env-example-is-incomplete) |
 | No frontend test runner | [operations](operations/README.md#testing) |
+| No browser, camera or E2E run | [audit](AUDIT.md#still-not-verified) |
+
+**Closed in Phase 1**, and no longer gaps: the emergency flow's 403s, the blank
+Match Result tab, Logout being reachable during an emergency, the
+`<alpha-value>` bug that made every opacity modifier a no-op, and the six files
+still on the removed palette. See the
+[Phase 1 outcome](AUDIT.md#phase-1-outcome-the-emergency-flow-was-broken-end-to-end).
