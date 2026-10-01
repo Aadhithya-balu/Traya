@@ -75,6 +75,46 @@ as `postgres` over `psycopg` and never uses `anon` or `authenticated`, so
 removing them broke nothing — verified by re-running the full emergency flow
 afterwards, which still returned 200 with an accepted match.
 
+### RLS is enabled on all 22 tables, and it filters
+
+`005_enable_rls.sql` turns on `ROW LEVEL SECURITY` everywhere in `public`,
+verified as `22 of 22`. The check that actually matters is not the flag:
+
+```
+created role traya_rls_probe, GRANTED SELECT on all tables in schema public
+users                 rows visible = 0
+biometric_embeddings  rows visible = 0
+medical_profiles      rows visible = 0
+audit_logs            rows visible = 0
+```
+
+A role holding an explicit `GRANT SELECT` on every table reads nothing. That
+is RLS filtering, not a missing grant, and it is asserted in
+`backend/tests/test_rls.py` on every Postgres test run.
+
+**`FORCE ROW LEVEL SECURITY` is deliberately not used, and this matters.** A
+table's owner bypasses its own policies, and TRAYA connects as `postgres`, which
+owns these tables — so the application is unaffected by RLS today. The
+protection applies to every *other* path in. Forcing it would extend RLS to the
+owner as well, and with no claim plumbing yet (below) the application's own
+writes would be denied. Locking the app out of its own database is not
+hardening, and Phase 4's risk section already names over-tight policies as the
+worse failure in this product.
+
+**The policy layer is the part that is not done, and it is blocked on an
+architecture mismatch rather than on effort.** `TARGET_ARCHITECTURE.md`
+specifies `caller_roles()` reading `auth.jwt() -> 'app_metadata' -> 'roles'`.
+TRAYA has no Supabase Auth: it signs and verifies its own JWTs with
+`SECRET_KEY` via PyJWT (`app/security/tokens.py:20`). `auth.jwt()` has nothing
+to read, so a policy written to that spec would be written against fiction.
+
+The Phase 4 gate's denial tests — a `registered_user` token unable to read
+another user's `emergency_profiles`, a `police_responder` unable to read blood
+groups, a user's own token unable to select their vectors — all require a claim
+source Postgres can see. Choosing that source (Supabase Auth, or pushing TRAYA's
+own claims through `set_config('request.jwt.claims', ...)` per transaction) is
+a decision with a large blast radius, and it is not one to make silently.
+
 ## Trust boundaries
 
 | Boundary | Trust level | Assumption |

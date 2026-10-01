@@ -94,9 +94,9 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 
 | Fact | Value |
 |---|---|
-| Backend tests | **189 passed** at commit `497e7af`. **207 passed** after Phase 3, ~40s, exit 0 |
-| Backend tests on real Postgres | **207 passed**, same count. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
-| Hosted Supabase | **Live and verified.** PostgreSQL 17.11, 22 tables, 7 roles / 18 permissions, full emergency flow returns HIGH_CONFIDENCE 0.995 |
+| Backend tests | **189 passed** at commit `497e7af`. **207 passed + 6 skipped** after Phase 4, ~55s, exit 0 |
+| Backend tests on real Postgres | **213 passed**, no skips. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
+| Hosted Supabase | **Live and verified.** PostgreSQL 17.11, 22 tables, RLS on 22/22, 7 roles / 18 permissions, emergency flow HIGH_CONFIDENCE 0.995 |
 | Frontend typecheck | **passes**, exit 0, strict TS |
 | `npm run docs:check` | **passes**, 29 pages |
 | Endpoints | **47** across 7 routers |
@@ -107,7 +107,7 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 | Thresholds | HIGH 0.82, REVIEW 0.62, FALLBACK_FACE 0.60, BOOST 0.05/0.06 |
 | Max impostor similarity | **0.817** — 6 of 30 impostor pairs exceed the 0.62 review threshold |
 | Rows in `face_embeddings` / pgvector | **none** — the column does not exist |
-| RLS policies | **none** — `database/rls.sql` is referenced in a docstring but does not exist. The `anon` grant that made this exploitable **is revoked** (`004_revoke_anon.sql`); the anon key now gets 401 on every app table |
+| RLS policies | **Enabled on 22 of 22 tables**, zero policies — the flag is on and a granted non-owner role reads 0 rows. The `anon` grant that made this exploitable **is revoked** (`004_revoke_anon.sql`); anon gets 401 on every app table. **Policies are blocked**: `caller_roles()` needs `auth.jwt()`, and TRAYA signs its own JWTs. See [SECURITY_MODEL.md](docs/SECURITY_MODEL.md#rls-is-enabled-on-all-22-tables-and-it-filters) |
 | Storage buckets | **2, private**, created on the hosted project. Retention policies still to set in the dashboard |
 | Supabase SDK | **not installed** — the app connects with `psycopg` as `postgres`, so nothing needs it |
 | Frontend test runner | **none** |
