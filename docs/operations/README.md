@@ -119,18 +119,38 @@ drifting example is worse than no example.
 
 ### Setting up Supabase
 
-Two files to run in the **Supabase SQL editor**, in this order. Both are
-idempotent, and both have been executed against a real Postgres 16 with pgvector,
-not written blind.
+Five files to run in the **Supabase SQL editor**, in this order. All of them are
+re-runnable, and all have been executed against a real project rather than
+written blind.
 
 | Order | File | What it does | When |
 |---|---|---|---|
 | 1 | `migrations/supabase/001_extensions.sql` | `create extension vector, pgcrypto`, then asserts both installed | Before Alembic |
 | 2 | `migrations/supabase/002_storage_buckets.sql` | Two private Storage buckets, optional | Any time |
 | 3 | `migrations/supabase/004_revoke_anon.sql` | Removes the anon key's read access to `public` | **After** `alembic upgrade head` |
-Order matters for `004`, which is the reason the files are numbered: it
-asserts that `postgres` holds grants in `public`, so it refuses to run against
-an empty schema. Run it after the tables exist.
+| 4 | `migrations/supabase/005_enable_rls.sql` | `ROW LEVEL SECURITY` on every table in `current_schema()` | **After** `alembic upgrade head` |
+| 5 | `006_claims.sql`, then `007_rls_policies.sql` | Claim helpers, the `traya_api` role, its grants, and the policies | **After** 5 |
+
+Order matters for `004`, which is one reason the files are numbered: it asserts
+that `postgres` holds grants in `public`, so it refuses to run against an empty
+schema. Run it after the tables exist. `006` creates the `traya_api` role itself,
+because it is the file that grants execute on the helpers to it; `007` therefore
+has to follow it.
+
+**`005`, `006` and `007` are safe to re-run**, which matters because they get
+applied by hand and then again after any edit. `CREATE POLICY` has no replace
+form, so every policy in `007` is preceded by a `drop policy if exists` naming
+the same policy. `tests/test_rls_policies.py` applies the whole set twice and
+asserts nothing changed, because a comment claiming a script is idempotent is a
+claim and not evidence.
+
+**One constraint on editing any of these files: no percent signs, anywhere,
+comments included.** psycopg validates percent sequences even when the query takes
+no parameters and rejects anything that is not one of its own three specifiers,
+so `format('%I', ...)` cannot be executed through the driver at all — it raises
+before touching the network. `006` and `007` build dynamic SQL with
+`quote_ident` and string concatenation instead. A test enforces this.
+
 
 **Run `004` on any project that has hosted data in it, even demo data.** Supabase
 grants `anon` `SELECT` on every table in `public` by default, and `anon` is the
@@ -374,27 +394,69 @@ flaky.
 
 ## SQL assets
 
-`database/` does not exist yet. The plan is:
+`database/` does not exist, and the plan for it is now **partly obsolete**:
+`database/rls.sql` is superseded by `migrations/supabase/006_claims.sql` and
+`007_rls_policies.sql`, which are written, applied to the hosted project, and
+tested. The remaining pieces are still unwritten:
 
 | File | Contents |
 |---|---|
 | `database/schema.sql` | The full schema, hand-maintained and reviewed. |
 | `database/indexes.sql` | Indexes Alembic does not create for you. |
-| `database/rls.sql` | Row-level security policies for PostgreSQL. |
 | `database/seed.sql` | Reference seed data, distinct from the Python seed. |
 | `database/queries/*.sql` | The verification queries used to check a deployment. |
 
-Until those exist, Alembic is the only schema source of truth, and there is no
-RLS at all. **Row-level security is not implemented** - authorization is
-enforced in Python by `require_permission` and the session-token check, which is
-a single layer rather than two. For a system holding medical data, defence in
-depth at the database is worth having, and the app is structured to allow it:
-every read already goes through a repository scoped by owner or session.
+Alembic remains the only schema source of truth, and that is deliberate — see
+[Setting up Supabase](#setting-up-supabase).
+
+**Row-level security is implemented and applied**, so the old statement here that
+authorization is "a single layer rather than two" was wrong as of Phase 4. The
+precise position, because the shorthand is misleading in both directions: RLS is
+on for all 22 tables with policies written for a `traya_api` role, and **the
+application connects as the table owner and bypasses its own policies**. Two
+layers exist; only one of them is on the path production traffic takes today. A
+client path needs a login role granted `traya_api` and a transaction that sets
+`request.jwt.claims`, and that plumbing is not written.
+
+### Verifying a deployment
+
+Two scripts, both run from `backend/` against whatever `DATABASE_URL` points at.
+They are diagnostics, not migrations: read the output before trusting a deployment
+you did not watch.
+
+| Script | What it does | Writes |
+|---|---|---|
+| `python scripts/inspect_hosted_rls.py` | Prints schema, RLS coverage, every policy, every `traya_auth` function, `traya_api`'s grants, and sample users with roles | Nothing |
+| `python scripts/apply_and_verify_hosted_rls.py` | Applies `006`/`007`, drops the two superseded helpers, then checks every gate path as a throwaway `LOGIN` role | One `emergency_sessions` row, removed in a `finally`; the probe role is dropped |
+| `python scripts/verify_hosted_app.py` | Confirms the app still works as owner — health, admin login, user list, emergency start, identification — and that the anon key is still refused | One `emergency_sessions` row, removed in a `finally` |
+
+`inspect_hosted_rls.py` is the one to run first. The Phase 4 version of the
+policy files had no `GRANT`s at all, so `traya_api` could read nothing for the
+uninteresting reason that it could not reach a table; the grants list in that
+script's output is what would have shown it.
+
+`apply_and_verify_hosted_rls.py` cannot use `SET LOCAL ROLE` the way the test
+suite does. The local suite connects as a superuser; the hosted application role
+is not one and is deliberately not a member of `traya_api` — granting it that
+membership would give the application a second, narrower identity to confuse the
+picture with. So it creates its own `LOGIN` role. If you connect to Supabase by
+hand, note that the pooler requires the tenant in the username
+(`<role>.<project-ref>`); a bare role name fails with "no tenant identifier
+provided", which looks like a network fault and is not one.
+
+**Both write scripts clean up after themselves, because a verification that
+accumulates rows on the hosted project is how a read-only check becomes data.**
+`verify_hosted_app.py` starts a real emergency session to prove the flow works,
+and removes it in a `finally`; the attempts and candidates go with it through
+`ON DELETE CASCADE`, and the audit rows that reference the session are left
+alone because the audit trail is append-only. Twelve sessions had accumulated
+from earlier runs of that script before the cleanup was added — worth knowing
+that `emergency_sessions` is not seeded and is safe to clear.
 
 `docs/backend/configuration.md` links here, and
 [ADR 0003](../decisions/0003-supabase-primary-sqlite-fallback.md) assumes these
-files exist. **They are the largest documentation inaccuracy in the repository
-right now**, and it is a missing-file inaccuracy rather than a wrong statement.
+files exist. **The `database/` gap remains the largest documentation inaccuracy in
+the repository** — a missing-file inaccuracy rather than a wrong statement.
 
 ## Production checklist
 

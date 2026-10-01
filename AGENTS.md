@@ -94,20 +94,20 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 
 | Fact | Value |
 |---|---|
-| Backend tests | **189 passed** at commit `497e7af`. **207 passed + 6 skipped** after Phase 4, ~55s, exit 0 |
-| Backend tests on real Postgres | **213 passed**, no skips. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
-| Hosted Supabase | **Live and verified.** PostgreSQL 17.11, 22 tables, RLS on 22/22, 7 roles / 18 permissions, emergency flow HIGH_CONFIDENCE 0.995 |
+| Backend tests | **235 passed** on Postgres, **211 passed + 24 skipped** on SQLite after Phase 4 |
+| Backend tests on real Postgres | **235 passed**, no skips, ~77s. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
+| Hosted Supabase | **Live and verified.** PostgreSQL 17.11, 22 tables, RLS on 22/22 with 19 policies, 7 roles / 18 permissions, emergency flow HIGH_CONFIDENCE 0.995 |
 | Frontend typecheck | **passes**, exit 0, strict TS |
-| `npm run docs:check` | **passes**, 29 pages |
+| `npm run docs:check` | **passes**, 30 pages |
 | Endpoints | **47** across 7 routers |
-| Tables | **19**, 4 Alembic migrations |
+| Tables | **22** in `public` (19 ORM models plus `alembic_version` and the two association tables), 4 Alembic migrations |
 | Roles / permissions | **7** / **18** |
 | Default database | **SQLite** (`sqlite:///./traya.db`) |
 | `EMBEDDING_DIM` | **320** (12 real + 308 zeros) |
 | Thresholds | HIGH 0.82, REVIEW 0.62, FALLBACK_FACE 0.60, BOOST 0.05/0.06 |
 | Max impostor similarity | **0.817** — 6 of 30 impostor pairs exceed the 0.62 review threshold |
 | Rows in `face_embeddings` / pgvector | **none** — the column does not exist |
-| RLS policies | **Enabled on 22 of 22 tables**, zero policies — the flag is on and a granted non-owner role reads 0 rows. The `anon` grant that made this exploitable **is revoked** (`004_revoke_anon.sql`); anon gets 401 on every app table. **Policies are blocked**: `caller_roles()` needs `auth.jwt()`, and TRAYA signs its own JWTs. See [SECURITY_MODEL.md](docs/SECURITY_MODEL.md#rls-is-enabled-on-all-22-tables-and-it-filters) |
+| RLS | **Enabled on 22 of 22, and it filters.** Policies are written for `traya_api`, a `NOLOGIN` role; `anon` gets 401 on every app table. **The application connects as table owner and bypasses its own policies** — `FORCE` is deliberately off. See [ADR 0007](docs/decisions/0007-rls-claims-and-live-role-resolution.md) and [SECURITY_MODEL.md](docs/SECURITY_MODEL.md#rls-is-enabled-on-all-22-tables-and-it-filters) |
 | Storage buckets | **2, private**, created on the hosted project. Retention policies still to set in the dashboard |
 | Supabase SDK | **not installed** — the app connects with `psycopg` as `postgres`, so nothing needs it |
 | Frontend test runner | **none** |
@@ -212,42 +212,47 @@ Ranked in [docs/AUDIT.md](docs/AUDIT.md#bugs-ranked). The five that matter:
 19. **New tables or columns require an Alembic migration**
     (`alembic revision --autogenerate`) **plus a check that the demo seed is
     still idempotent** on the migrated schema.
-20. **Authentication is `Depends(get_current_user)` plus a permission helper**
+20. **`migrations/supabase/*.sql` contains no percent signs**, comments
+    included. psycopg validates percent sequences even with no parameters and
+    rejects any specifier that is not its own, so `format('%I', ...)` raises
+    before touching the network. Use `quote_ident` and concatenation. A test
+    enforces this.
+21. **Authentication is `Depends(get_current_user)` plus a permission helper**
     from `app/security/permissions.py`. Authorization is a data question, not a
     role-string comparison.
 
 ### Testing
 
-21. **`pytest` env vars go at the very top of `tests/conftest.py`, before any
+22. **`pytest` env vars go at the very top of `tests/conftest.py`, before any
     `app` import** — `TESTING=1`, `DEMO_MODE=1`, `DATABASE_URL`. The suite uses a
     fresh temp SQLite DB, removed per run.
-22. **`TestClient.delete()` has no `json=` kwarg.** Use
+23. **`TestClient.delete()` has no `json=` kwarg.** Use
     `client.request("DELETE", url, headers=..., json=...)`.
-23. **`pytest.ini` sets `addopts = -q`.** Passing another `-q` yields `-qq`,
+24. **`pytest.ini` sets `addopts = -q`.** Passing another `-q` yields `-qq`,
     which suppresses the `N passed` summary. Judge success by `$LASTEXITCODE`,
     not by the missing summary.
 
 ### Biometric determinism
 
-24. **Synthetic face seeds must be deterministic.** The face feature space is
+25. **Synthetic face seeds must be deterministic.** The face feature space is
     small, so arbitrary identity strings collide — observed
     `unknown-person-X9` vs `test-identity` = 0.807. **Never introduce a
     random UUID-based identity into enrollment; it made the suite flaky.** The
     demo no-match identity is `enroll-demo-charlie-99`.
-25. `app/api/demo.py` seeds the demo-enroll face from `user.email`, and
+26. `app/api/demo.py` seeds the demo-enroll face from `user.email`, and
     `test_demo_enroll_works_with_consent` uses a fixed account. On purpose.
-26. **All demo data is fictional and must stay that way.** No real names,
+27. **All demo data is fictional and must stay that way.** No real names,
     addresses, phone numbers or medical histories. Emails ending `.local` are
     rejected by pydantic `EmailStr`; demo uses `.demo.traya` / `.responder.traya`.
 
 ### Security
 
-27. **Biometric embeddings are encrypted at rest (Fernet) and never returned to
+28. **Biometric embeddings are encrypted at rest (Fernet) and never returned to
     clients.** There is no endpoint that returns a vector, and **no agent may add
     one**. Never log raw vectors. Never log unredacted clinical detail.
-28. **Never log or commit secrets.** `SECRET_KEY` / `ENCRYPTION_KEY` come from
+29. **Never log or commit secrets.** `SECRET_KEY` / `ENCRYPTION_KEY` come from
     `.env`; see `.env.example`.
-29. **`ENCRYPTION_KEY` is derived from `SECRET_KEY` if unset.** Rotating
+30. **`ENCRYPTION_KEY` is derived from `SECRET_KEY` if unset.** Rotating
     `SECRET_KEY` without setting `ENCRYPTION_KEY` makes every stored embedding
     **permanently unreadable**. Set both, together, deliberately.
 
@@ -272,6 +277,9 @@ Run from the repo root unless noted.
 | Migration drift | `cd backend; .venv\Scripts\python.exe -m alembic upgrade head; .venv\Scripts\python.exe -m alembic check` |
 | New migration | `cd backend; .venv\Scripts\python.exe -m alembic revision --autogenerate -m "..."` |
 | Re-seed demo | `cd backend; .venv\Scripts\python.exe -m app.services.demo.seed` |
+| Inspect hosted RLS | `cd backend; .venv\Scripts\python.exe scripts/inspect_hosted_rls.py` — read-only |
+| Apply + verify hosted RLS | `cd backend; .venv\Scripts\python.exe scripts/apply_and_verify_hosted_rls.py` — **writes to the database**; run `inspect_hosted_rls.py` first |
+| Verify hosted app + anon denial | `cd backend; .venv\Scripts\python.exe scripts/verify_hosted_app.py` |
 
 ### Verification is mandatory
 
@@ -280,6 +288,7 @@ Run from the repo root unless noted.
 | Any backend change | backend test suite |
 | Any frontend change | `npm run typecheck` **and** `npm run build` |
 | Adding/renaming a component, endpoint, model, table, migration, setting, role, permission, page, icon, API method or exported type | `npm run docs:check` |
+| Editing `migrations/supabase/*.sql` | backend suite on Postgres (the policies are executed verbatim), **and** reapply + re-verify if the change targets hosted |
 
 **A change is not done until the relevant commands pass.** Report the actual
 result, not an expectation.
@@ -307,7 +316,10 @@ C:\Traya\
         medical, notification, location, hospital, audit_service
       main.py                app factory, lifespan, health, SPA serving
     migrations\              Alembic (4 versions)
-    tests\                   pytest, 189 tests
+    tests\                   pytest, 235 tests
+    scripts\                 inspect_hosted_rls.py, apply_and_verify_hosted_rls.py,
+                             verify_hosted_app.py — all read database state, none
+                             deploy schema
   frontend\
     src\
       pages\                 10 pages, all routed
@@ -358,7 +370,7 @@ method and exported TypeScript type **must be named on its owning page.**
 | [docs/frontend/state-and-data.md](docs/frontend/state-and-data.md) | Contexts, hooks, client, types |
 | [docs/frontend/design-system.md](docs/frontend/design-system.md) | Tokens, spacing, theme, i18n |
 | [docs/operations/README.md](docs/operations/README.md) | Dev, seeding, testing, deploying |
-| [docs/decisions/README.md](docs/decisions/README.md) | ADRs 0001–0006 — why the system is the way it is |
+| [docs/decisions/README.md](docs/decisions/README.md) | ADRs 0001–0007 — why the system is the way it is |
 
 ### Writing rules
 
@@ -392,13 +404,24 @@ and tab bar are opaque, five colour tokens now clear 4.5:1 on every background
 they render on, and contrast is asserted by `backend/tests/test_contrast.py`
 instead of being eyeballed.
 
+**Fixed in Phase 4** — do not re-report: RLS policies exist and are applied, the
+`traya_api` role has grants (without them the policies were decorative), roles
+resolve live so deactivation revokes access immediately, responder clinical
+access is scoped to the incident's subject, and the two table-reading helpers are
+`SECURITY DEFINER` (as invoker functions they read nothing and silently deny).
+Four escalating-tamper tests are in `backend/tests/test_auth.py`.
+
 1. **The biometric engine is a simulation.** See §1. Recorded in
    [ADR 0001](docs/decisions/0001-simulation-biometric-engine.md).
-2. **No RLS, no pgvector, no Supabase SDK.** Authorization is Python-only.
-   `database/*.sql` does not exist, and `public` on the hosted project still has
-   `rowsecurity` off on all 22 tables. What changed in Phase 3 is that the
-   exposure is no longer open: `004_revoke_anon.sql` revokes the default `anon`
-   grants, so the public key reads nothing. Real RLS is Phase 4.
+2. **No client path uses the RLS policies, and there is no pgvector.** RLS is on
+   for all 22 tables with 19 policies written for the `traya_api` role, and the
+   hosted `public` schema is verified as filtering. But `traya_api` is `NOLOGIN`
+   and nothing connects as it, while the application connects as the table owner
+   and **bypasses its own policies** — `FORCE ROW LEVEL SECURITY` is deliberately
+   off. So production traffic is still authorized in Python alone. Also still
+   absent: plaintext pgvector and the Supabase SDK. `database/*.sql` still does
+   not exist; the policies live in `migrations/supabase/006_claims.sql` and
+   `007_rls_policies.sql`. See [ADR 0007](docs/decisions/0007-rls-claims-and-live-role-resolution.md).
 3. **The silent SQLite fallback is gone** — `DATABASE_ALLOW_FALLBACK` defaults
    to `false` and `DEMO_MODE=false` refuses it outright, so real medical data
    cannot land in a local file unless somebody deliberately opts in. **Supabase

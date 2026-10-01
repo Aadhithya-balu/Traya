@@ -18,7 +18,7 @@ yet. Implementation-level detail lives in
 | Permission matrix | **Real.** 7 roles, 18 permissions, seeded and auditable |
 | Audit trail | **Real.** Append-only, written with domain writes |
 | Embeddings never leave the backend | **Real.** No endpoint returns a vector |
-| **Row Level Security** | **Absent, and measured.** Python-only authorization |
+| **Row Level Security** | **Enabled on 22/22, with policies for a client-facing role.** The application still bypasses it as table owner — see below |
 | **Session storage** | **`localStorage`.** Vulnerable to XSS and extensions |
 | **Content Security Policy** | **Absent** |
 | **Silent database fallback** | **Closed in Phase 3.** Opt-in, off by default, refused in production mode |
@@ -35,10 +35,11 @@ granting plain `SELECT` made every row of `users`, `biometric_embeddings` and
 dropped immediately afterwards; the finding was not left in place to be
 discovered by somebody else.
 
-So until Phase 4 lands, the service-role key must never reach a browser, and the
-anon key must be treated as a full read of anything it is granted. The Python
-permission matrix is real work, but it is the only layer, and a JWT is not a
-wall.
+Phase 4 closed that specific hole: RLS is on everywhere, the anon grants are
+revoked, and policies exist for the role a client would use. What has **not**
+changed is that the application connects as the table owner, so its own traffic
+is still authorized in Python alone. Read the section below before treating the
+policies as the thing protecting production.
 
 ### The anon grant is now revoked on the hosted project
 
@@ -101,19 +102,50 @@ writes would be denied. Locking the app out of its own database is not
 hardening, and Phase 4's risk section already names over-tight policies as the
 worse failure in this product.
 
-**The policy layer is the part that is not done, and it is blocked on an
-architecture mismatch rather than on effort.** `TARGET_ARCHITECTURE.md`
-specifies `caller_roles()` reading `auth.jwt() -> 'app_metadata' -> 'roles'`.
-TRAYA has no Supabase Auth: it signs and verifies its own JWTs with
-`SECRET_KEY` via PyJWT (`app/security/tokens.py:20`). `auth.jwt()` has nothing
-to read, so a policy written to that spec would be written against fiction.
+**The policy layer now exists, and it is applied on the hosted project.**
+`006_claims.sql` and `007_rls_policies.sql` were written against
+`request.jwt.claims` rather than `auth.jwt()` — see
+[ADR 0007](decisions/0007-rls-claims-and-live-role-resolution.md) — and both are
+live. Measured through a throwaway `LOGIN` role granted `traya_api`, against real
+rows, on the hosted project:
 
-The Phase 4 gate's denial tests — a `registered_user` token unable to read
-another user's `emergency_profiles`, a `police_responder` unable to read blood
-groups, a user's own token unable to select their vectors — all require a claim
-source Postgres can see. Choosing that source (Supabase Auth, or pushing TRAYA's
-own claims through `set_config('request.jwt.claims', ...)` per transaction) is
-a decision with a large blast radius, and it is not one to make silently.
+```
+registered_user   sees own users row only
+police_responder  sees no other person's medical_profiles
+medical_responder sees no other person's medical_profiles
+                  ...and the incident subject's once an incident names them
+biometric_embeddings         refused (permission denied), every role
+biometric_enrollment_samples refused (permission denied), every role
+audit_logs   auditor reads it; a plain user does not
+hospitals, roles   readable with no claims at all, by design
+```
+
+Three things about that list are deliberate and are asserted as their own tests:
+
+- **The responder gate is scoped to the incident's subject.** "Has a live
+  incident" is not "may read every enrolled person" — the loose reading hands
+  every responder with an open incident every blood group in the system. The gate
+  is `view_medical_alerts` AND being party to a live incident whose
+  `identified_user_id` is that row's owner.
+- **The vector tables are refused at the privilege layer, not filtered.** No
+  grant and no policy, so there is no filter a later edit could widen. A
+  row-counting test would have scored a permission error as a pass.
+- **Roles are resolved live**, so deactivating an account revokes it on the next
+  statement rather than at token expiry.
+
+**`traya_api` is `NOLOGIN` and nothing uses it yet.** The policies are a real,
+tested barrier for a client path that does not exist; the application bypasses
+them by owning the tables. A future client path needs a login role granted
+`traya_api` plus a transaction that sets `request.jwt.claims` from TRAYA's JWT.
+That plumbing is not written, and until it is, production traffic is protected by
+the Python layer, not by RLS.
+
+**Deployment scripts carry a constraint worth knowing before editing them.** They
+contain no percent signs anywhere, comments included, and use `quote_ident`
+rather than `format`. psycopg validates percent sequences even when the query
+takes no parameters and rejects any specifier that is not its own, so
+`format('%I', ...)` cannot be executed through the driver at all. A test asserts
+this.
 
 ## Trust boundaries
 

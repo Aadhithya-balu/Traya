@@ -180,8 +180,15 @@ The role model carries over from `ROLE_PERMISSIONS`, which is already the single
 source of truth in `app/security/permissions.py`. The migration seeds it into
 Postgres so RLS and the application agree by construction.
 
+**As built, the helper reads `request.jwt.claims` and resolves roles from the
+database rather than from the token.** The sketch below is what this page
+originally specified, and it is kept for comparison:
+
 ```sql
--- Helper: the caller's effective roles, from the JWT.
+-- Superseded. See ADR 0007 and migrations/supabase/006_claims.sql.
+-- Two reasons: TRAYA has no Supabase Auth, so auth.jwt() has nothing to read;
+-- and a role inside a signed JWT is a cached authorization decision that no
+-- revocation reaches before expiry.
 CREATE FUNCTION caller_roles() RETURNS SETOF text
 LANGUAGE sql STABLE AS $$
   SELECT unnest(coalesce(
@@ -194,6 +201,31 @@ LANGUAGE sql STABLE AS $$
   SELECT p = ANY(SELECT un_array FROM caller_roles())
 $$;
 ```
+
+What is deployed instead, in outline:
+
+```sql
+-- claim source: request.jwt.claims, which PostgREST and set_config both write
+caller_claims()  -> jsonb
+caller_id()      -> text          -- returns text, every id column is varchar
+caller_has(p text) -> boolean     -- SECURITY DEFINER, joins user_roles live
+subject_in_active_incident(p_user_id text) -> boolean
+```
+
+The two table-reading helpers are `SECURITY DEFINER` because RLS is enabled on
+every table: an invoker helper reads nothing and returns `false` forever, which
+would make every permission-gated policy deny while still looking correct in a
+deny-only test. `search_path` is pinned per function so a caller cannot redirect
+it. Roles resolve live, so deactivating an account takes effect on the next
+statement.
+
+**One gap in the sketch above is now closed by narrowing it.** The original
+wording — responder access to clinical data requires an active incident — did
+not say *whose* records. Implemented as "permission AND any active incident", it
+would hand every responder with an open incident the medical record of every
+enrolled person. The deployed policy is
+`view_medical_alerts` AND `identified_user_id` of a live incident the caller is
+party to.
 
 ### Policy intent
 

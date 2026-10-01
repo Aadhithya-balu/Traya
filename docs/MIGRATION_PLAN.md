@@ -489,6 +489,55 @@ than over-permissive ones in this product. Mitigation: `police_responder` and
 `medical_responder` get a synthetic end-to-end test each, so a policy that
 breaks a real emergency flow fails CI rather than production.
 
+### Outcome
+
+**Done, applied to the hosted project, and measured there rather than only on
+local Postgres.** Decision recorded in
+[ADR 0007](decisions/0007-rls-claims-and-live-role-resolution.md).
+
+| Gate item | State |
+|---|---|
+| Each policy has a test asserting the denial path | **Pass.** 18 tests in `test_rls_policies.py`, plus 4 in `test_auth.py` |
+| `registered_user` cannot select another user's clinical record | **Pass.** Asserted on the exact set of visible rows, not a count |
+| `police_responder` cannot read blood groups | **Pass** |
+| A user's own token cannot select from the embeddings | **Pass, and refused** — permission denied, not an empty result |
+| A valid token cannot escalate to `admin` by editing the payload | **Pass.** Both halves tested: a forged signature is 401, and a *correctly signed* token claiming `admin` is 403 because roles come from the database |
+
+Verification run after applying, through a throwaway `LOGIN` role granted
+`traya_api` against real hosted rows, is recorded in
+[SECURITY_MODEL.md](SECURITY_MODEL.md#rls-is-enabled-on-all-22-tables-and-it-filters).
+The application was re-checked afterwards and still serves its own traffic:
+health connected on all 22 tables, admin login, user list, emergency start and
+identification all 200, anon key still 401 on four tables.
+
+Four things this phase changed beyond adding policies, each of which was a
+defect found by the tests rather than by review:
+
+1. **`caller_has` was blind to `users.is_active`.** A deactivated account kept
+   every permission-gated policy passing. The check now lives in the helper
+   rather than being assumed from a sibling.
+2. **Responder access was unscoped.** "Permission AND any active incident" gave
+   any responder with an open incident every blood group in the system. It is now
+   scoped to the incident's `identified_user_id`.
+3. **`traya_api` had no grants at all**, so the hosted policies were decorative —
+   a role with no `USAGE` on the schema reads nothing, and "no leakage" would
+   have been true for the wrong reason. The grants are in `007`, applied through
+   `current_schema()` so the same file works on hosted `public` and on the test
+   schema.
+4. **The helpers had to become `SECURITY DEFINER`.** With RLS on every table, an
+   invoker helper reads zero rows and returns `false` forever.
+
+Also recorded because it will bite the next person editing these scripts: they
+contain **no percent signs anywhere**, comments included, and use `quote_ident`
+rather than `format`. psycopg validates percent sequences even with no parameters
+and rejects any specifier that is not its own.
+
+**Deliberately not done.** `FORCE ROW LEVEL SECURITY` is not enabled, so the
+application — which owns the tables — still bypasses these policies and remains
+authorized in Python alone. `traya_api` is `NOLOGIN` and nothing uses it yet. A
+client path needs a login role granted `traya_api` plus per-transaction
+`set_config('request.jwt.claims', ...)`; that plumbing is not written.
+
 ## Phase 5 - Replace the biometric engine
 
 **The core work.** Everything until now is infrastructure.
