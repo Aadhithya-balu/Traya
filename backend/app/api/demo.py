@@ -213,9 +213,10 @@ def demo_enroll(
     if usable < 2:
         raise HTTPException(status_code=422, detail="Demo enrollment failed: insufficient usable samples")
 
+    algo_version = engine.algo_version
     profile = user.biometric_profile or BiometricProfile(user_id=user.id)
     profile.status = "enrolled"
-    profile.algo_version = settings.BIOMETRIC_ALGO_VERSION
+    profile.algo_version = algo_version
     profile.num_samples = len(vectors)
     profile.enrolled_at = datetime.now(UTC)
     if user.biometric_profile is None:
@@ -229,7 +230,7 @@ def demo_enroll(
             BiometricEmbedding(
                 profile_id=profile.id,
                 embedding_blob=encrypt_bytes(serialize_embedding(vec)),
-                algo_version=settings.BIOMETRIC_ALGO_VERSION,
+                algo_version=algo_version,
             )
         )
     db.commit()

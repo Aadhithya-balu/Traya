@@ -132,50 +132,125 @@ data is fictional and must stay that way.
 
 ---
 
-## Identification engine - `app/services/identification/engine.py`
+## Biometric providers - `app/services/identification/providers.py`
 
-`app/services/identification/engine.py`. **The engine is a simulation, not a
-production recogniser** - see
-[ADR 0001](../decisions/0001-simulation-biometric-engine.md). Read that before
-trusting anything in this section.
+`app/services/identification/providers.py`. **Two interchangeable
+implementations of one interface.** The real one is YuNet (detection, with five
+landmarks) plus SFace (a 128-dimensional descriptor), both running on the OpenCV
+DNN runtime. The simulation one is the pre-Phase-5 engine, kept deliberately so
+the demo and the test suite remain runnable on a machine with no model files.
 
-### Public surface
+| Class | Role |
+|---|---|
+| `FaceEmbeddingProvider` | The `Protocol`. `detect`, `embed`, `pose`, `similarity`, `align`, `is_simulation`, `mode`, `name`, `version`, `preprocessing_version`, `dimension`. |
+| `YuNet128Provider` | The real engine. `is_simulation = False`, `mode = "yunet"`, `name = "sface"`. |
+| `SimulationProvider` | 12 darkness features zero-padded to 320. `is_simulation = True`, `mode = "simulation"`. |
+| `AlignedFace` | An aligned 112x112 crop plus the `roll_degrees` that alignment removed. |
+| `FaceBox` | `x`, `y`, `w`, `h`, `score`, `landmarks` (5 points or `None`), `source`. |
+
+Module functions: `get_provider(reload=False)` resolves and caches the
+configured provider; `reset_provider()` drops the cache; `models_present()`
+reports whether both weight files are on disk.
+
+**The image helpers moved here** and are re-exported by `engine.py`, so
+`engine.decode_image` is the same object. They are provider plumbing now: the
+real engine needs the NumPy grayscale array that the OpenCV runtime wants, and
+the simulation needs the skin mask.
 
 | Function | Purpose |
 |---|---|
 | `decode_image` | Magic-byte validation; accepts JPEG, PNG and WebP. |
 | `to_gray_np` | Grayscale `numpy` array. |
 | `skin_mask` | HSV skin segmentation at a 1/4 downscale; returns mask and component boxes. |
+| `variance_of_laplacian` | The blur metric the quality gate scores on. |
+
+`FaceBox` has two derived properties beyond `area`: `has_landmarks` reports
+whether the five points are present, which is what decides if pose can be read
+geometrically. `dimension` is a provider class attribute (128 real, 320
+simulation) and is the number the storage layer should be checked against.
+
+### The two settings that decide which engine runs
+
+`BIOMETRIC_ENGINE` accepts `auto`, `yunet` or `simulation`. **`opencv` is
+retained only as an alias for `yunet`, and it logs a warning**, because that
+value used to promise real detection and silently deliver the simulation -
+OpenCV 5 removed the `CascadeClassifier` API it was gated on. See
+[ADR 0001](../decisions/0001-simulation-biometric-engine.md) for that history
+and [ADR 0008](../decisions/0008-real-biometric-engine.md) for the replacement.
+
+`auto` uses the real engine **only if the weight files are present**, and
+otherwise logs a warning that names the simulation as what it is. `yunet` is
+strict: it raises if the weights are missing, on the grounds that a deployment
+which asked for a recogniser and got a simulation is the worst failure this
+system has. Weights are fetched by
+`backend/scripts/fetch_biometric_models.py`, which verifies a pinned SHA-256
+per file and writes a `NOTICE` beside them. They are not committed.
+
+### The two engines are not interchangeable at the data level
+
+A YuNet descriptor and a simulation vector are different lengths in different
+units, so the provider refuses to compare across engines:
+
+- **Real:** 128 dimensions, L2-normalised, cosine similarity in [0, 1]. Every
+  coordinate is non-zero.
+- **Simulation:** 320 dimensions of which 12 are real and 308 are zero padding.
+
+`similarity()` raises `ValueError` on a length mismatch rather than returning a
+low score, and templates are stored with the engine's `version` so a real
+descriptor is never compared against a simulation vector that happens to be in
+the same table. `version` and `preprocessing_version` are the reason a stored
+template is comparable or not; changing either invalidates it.
+
+---
+
+## Identification engine - `app/services/identification/engine.py`
+
+`app/services/identification/engine.py`. A thin facade over whichever provider
+is configured, holding the quality gate and the pose rules. The engine no longer
+knows how a face is found or described - it delegates to a provider and owns the
+decisions that must behave identically on both engines.
+
+### Public surface
+
+| Function | Purpose |
+|---|---|
+| `decode_image`, `to_gray_np`, `skin_mask` | Re-exported from `providers` - the same objects, not copies. |
 | `analyze_quality` | The quality gate. Returns a `QualityReport` (`to_dict`). |
-| `detect_faces` | Haar cascade when available and `BIOMETRIC_ENGINE` is `auto` or `opencv`; otherwise simulation. Returns boxes plus a mode string. |
-| `extract_embedding` | 12 explicit darkness features, per-feature scaled, zero-padded to `EMBEDDING_DIM` (320). |
-| `estimate_pose` | Normalised darkness asymmetry in (-1, 1) with a confidence. **Not degrees.** |
+| `detect_faces` | Delegates to the provider. Returns boxes plus a mode string. |
+| `extract_embedding` | Delegates to the provider. Dimension follows the engine. |
+| `estimate_pose` | Landmarks when the provider has them, asymmetry otherwise. |
 | `direction_against` | Resolves a `PoseEstimate` to `front`/`left`/`right`/`up`/`down` given an optional baseline. |
 | `pose_step_key` | The step a pose represents; `unknown` when unconfident. |
-| `compare` | `clamp(1 - ||a - b|| / 3.0, 0, 1)`. |
+| `compare` | Delegates to the provider's `similarity`. |
 | `get_template` | The template layer; a passthrough in simulation. |
 | `mean_center` | No-op passthrough. |
 | `compare_centered` | Delegates to `compare`. |
 | `get_engine` | The module-level `BiometricEngine` singleton. |
+| `get_provider` | Re-exported from `providers`, so callers need one import. |
 
-Class `BiometricEngine`: `mode` (`simulation` or `opencv`), `is_simulation`, and
+Class `BiometricEngine`: `mode`, `is_simulation`, `algo_version`, `dimension` and
 `process(image_bytes)`, `embed(image_bytes, box)`, `pose(image_bytes, box)`,
 `similarity(a, b)`.
 
+**`dimension` is a property, not a constant**, and that is deliberate. It reads
+through to whichever provider is active, so a caller sizing a buffer gets 128 on
+the real engine and 320 on the simulation without branching. Anything that
+persists a vector should read it rather than trusting `settings.EMBEDDING_DIM`,
+which only ever describes the simulation.
+
 Private: `_label` (4-connected components), `_variance_of_laplacian`,
-`_simulate_detect`, `_asymmetry`.
+`_simulate_detect`, `_asymmetry`, `_pose_from_landmarks`.
 
 ### Data classes
 
-Four `@dataclass` results carry data out of the module. None of them has any
-behaviour beyond serialisation or a derived property.
+Four `@dataclass` results carry data out of the module.
 
 | Class | Fields / properties |
 |---|---|
-| `FaceBox` | `x`, `y`, `w`, `h`; `area` (derived, `w * h`) and `to_dict()`. |
+| `FaceBox` | `x`, `y`, `w`, `h`; `area` (derived, `w * h`) and `to_dict()`. Re-exported from `providers`. |
 | `QualityReport` | The five quality scores plus `usable_for_matching`, `reasons`, `reason_codes`; `to_dict()`. |
 | `DetectionResult` | `face_boxes`, `quality`, `engine_mode`, `faces_found`. |
-| `PoseEstimate` | `asymmetry`, `confidence`, `direction()` and `is_frontal()`. |
+| `PoseEstimate` | `offset_x`, `offset_y`, `confident`, `roll_degrees`, `source`; `direction` and `is_frontal` derived. |
 
 `area` is a `@property`, not a field, so it is available on every box without
 the detector computing it. `direction` and `is_frontal` are the same idea for
@@ -198,34 +273,57 @@ A capture is `usable_for_matching` only when `image_quality_score >= 0.5`,
 face is present**. `reason_codes` is what the UI and the enrollment coach both
 read, so the engine remains the single authority on usability.
 
+**The gate is engine-dependent in one place worth knowing.** A real detector
+returns a face box but not a skin-density measurement, so `face_visibility_score`
+is derived from the box's share of the frame and is never `0.0` on the real
+engine. The simulation, which produces its own boxes, measures skin coverage
+directly. A capture can therefore be judged `face_too_small` on the simulation
+and pass on the real engine for the same picture.
+
 ### Pose
 
-`estimate_pose` returns normalised asymmetry, not an angle. Constants
-`TURNED_OFFSET = 0.03` and `MAX_MEASURABLE_ASYMMETRY = 0.6`. Low confidence
-(`face_too_small`, `low_contrast`, `no_structure`, `one_side_dominated`)
-yields `unknown` - never a false `front`, and never a rejection.
+Two readers, distinguished by `PoseEstimate.source`.
 
-### Why this is not a biometric
+**Real engine (`source = "landmarks"`).** `offset_x` and `offset_y` are the
+horizontal and vertical position of the nose tip relative to the midpoint of the
+eyes, taken from the detector's five landmarks. `roll_degrees` is the measured
+eye-line angle and needs no baseline.
 
-- The embedding is 12 darkness features. It is a deterministic image
-  descriptor, not a learned face representation, and it is not biometrically
-  meaningful.
-- `compare` measures how similar two images are in brightness.
-- **Measured over the synthetic corpus:** clean same-identity 0.986-0.995,
-  degraded same-identity 0.711-0.866, impostor 0.000-0.817 with a mean of
-  0.309. The impostor range overlaps the degraded same-identity range, and
-  6 of 30 impostor pairs exceed the 0.62 review threshold. Two demo identities
-  collide at 0.817.
-- OpenCV 5.x ships no cascade data in this environment, so `detect_faces` runs
-  in simulation mode and the boxes are synthetic too.
+**The bias, measured.** Three frontal faces from three different people gave
+`offset_x` of +0.43, +0.45 and +0.53 - all of them "left" if read absolutely, and
+all of them far past the `TURNED_OFFSET = 0.03` threshold. A real nose tip sits
+off the midpoint of its own eyes by a per-identity amount.
 
-`mode` and `is_simulation` exist so no caller can quietly present this as a
-working recogniser. Every API result carries `engine_mode` and `demo_mode`, and
-the UI renders a simulation banner.
+**So a landmark reading with no baseline returns `unknown`, not a direction.**
+`direction_against` enforces it, and when a baseline *is* supplied both axes are
+read as a delta from that baseline, so the bias cancels. `unknown` is the honest
+answer: the measurement happened and is not interpretable without knowing where
+this person's centre is. This is what keeps Phase 6's guided wizard from asking
+someone to turn their head while they are already facing the camera.
 
-**Known defect:** `estimate_pose` has unreachable code after its first `return`
-(a duplicate return with a different reason, lines 523-526). It is dead, not
-harmful, but it should be deleted.
+**Simulation (`source = "asymmetry"`).** Normalised brightness asymmetry between
+the halves of the crop. Documented in ADR 0001; it measures how lopsided the dark
+regions are, not where the head is pointing, and it says so. Its left/right
+reading is signed by the crop, so it does not need a baseline for horizontal.
+
+When the provider returns no landmarks, the engine falls back to the asymmetry
+reader so a box without points still gets a reading. Low confidence
+(`face_too_small`, `low_contrast`, `no_structure`, `one_side_dominated`) yields
+`unknown` - never a false `front`, and never a rejection.
+
+### What the numbers do and do not say
+
+Every result carries `engine_mode` and `is_simulation`, so no caller can present
+one engine's output as the other's, and the UI renders a simulation banner from
+the same fields. Measured figures for both engines, with the commands that
+produced them, are in
+[MODEL_EVALUATION.md](../MODEL_EVALUATION.md).
+
+**Neither engine's thresholds are calibrated.** The real engine's figures come
+from three photographs of two people. That is enough to show the descriptor
+separates those identities and that alignment works, and nowhere near enough to
+state a false-match rate. Calibration is Phase 10, on a proper corpus, and the
+thresholds in `system_settings` are still the simulation's.
 
 ---
 

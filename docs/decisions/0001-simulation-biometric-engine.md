@@ -2,7 +2,13 @@
 
 # ADR 0001: The biometric engine is a simulation, not a production recogniser
 
-- **Status:** Accepted
+- **Status:** Accepted. **Superseded in part by
+  [ADR 0008](0008-real-biometric-engine.md)** as of Phase 5: a real recogniser
+  (YuNet plus SFace 128D) now exists behind the same interface and is selected
+  when its weights are present. Everything below still describes the simulation,
+  which remains in the codebase and remains selectable with
+  `BIOMETRIC_ENGINE=simulation`. The measured figures in this ADR remain valid
+  **for the simulation** and must not be read as describing the real engine.
 - **Date:** 2026-08-15
 - **Affects:** `app/services/identification/engine.py`, `app/config/settings.py`, `app/schemas`
 
@@ -52,3 +58,10 @@ This is a functioning demonstration, not a working biometric.
 present this as a working recogniser. See
 [ADR 0004](../decisions/README.md) and the "Accuracy status" section of the
 docs index.
+
+**Update, Phase 5.** A real recogniser is now available
+([ADR 0008](0008-real-biometric-engine.md)), so "there is no real face detection
+and no real face embedding" is no longer true of the codebase. It remains true of
+any deployment whose model weights are absent, and the disclosure machinery above
+is what distinguishes the two cases. The false-accept measurements in this ADR
+still apply whenever `engine_mode` is `simulation`.

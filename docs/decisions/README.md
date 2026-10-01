@@ -12,6 +12,7 @@ re-litigated. Each ADR states the context, the decision, and what it costs us.
 | [0005](0005-biometric-encryption-at-rest.md) | Biometric embeddings are Fernet-encrypted and never returned to clients | Accepted |
 | [0006](0006-audit-on-every-sensitive-action.md) | Every sensitive action writes an append-only audit row | Accepted |
 | [0007](0007-rls-claims-and-live-role-resolution.md) | RLS policies read `request.jwt.claims`, and roles are resolved live | Accepted |
+| [0008](0008-real-biometric-engine.md) | YuNet plus SFace 128D on the OpenCV runtime, behind the same provider interface as the simulation | Accepted |
 
 ## Adding an ADR
 

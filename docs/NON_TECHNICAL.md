@@ -167,19 +167,27 @@ is that it cannot be made risk-free. What can be done is make it proportionate.
 The most useful thing on this page.
 
 **The recognition technology is not finished.** This is the single most
-important caveat, and it is not buried. The version currently built
-demonstrates the complete process - camera, quality checks, matching, threshold
-decision, emergency information, incident record - end to end, so the system can
-be understood and tested. But the face recognition inside it is a placeholder. It
-compares brightness patterns, not identity. It is called a simulation, it is
-labelled as one in the system's own output, and **it must not be used to
-identify a real person.**
+important caveat, and it is not buried. The system demonstrates the complete
+process - camera, quality checks, matching, threshold decision, emergency
+information, incident record - end to end, so it can be understood and tested.
 
-The replacement is chosen and specified: real face detection, proper alignment,
-and a genuine 128-number face description. The plan to install and measure it is
-in the migration plan. Until that is done and measured, no accuracy claim is
-made anywhere in this project - and when it is made, it will carry the numbers
-behind it.
+**As of Phase 5 there is real face recognition in it.** A genuine face detector
+and a genuine 128-number face description are now installed and run when their
+model files are present. On three test photographs it told two people apart with
+a wide margin.
+
+**That is as far as the evidence goes, and the distinction matters.** Three
+photographs cannot tell you how often the system would be wrong about a real
+person, which is the only question that matters in an emergency. The
+confidence thresholds that decide "match" versus "check with a human" are
+inherited from the old placeholder and have not been re-measured for the new
+recogniser. **The system must not be used to identify a real person.**
+
+The system labels which engine produced every result, and it is never ambiguous:
+you cannot mistake the placeholder for the real one, and you cannot mistake a
+real-but-uncalibrated match for a validated one. Re-measuring the thresholds on
+a proper test set is a later phase, and when those numbers exist they will be
+published in full - including any that look bad.
 
 **Other limits, stated plainly:**
 

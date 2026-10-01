@@ -69,10 +69,20 @@ elif os.path.exists(_TEST_DB):
 os.environ["TESTING"] = "1"
 os.environ["DEMO_MODE"] = "1"
 os.environ["DATABASE_URL"] = _TEST_PG_URL or "sqlite:///" + _TEST_DB.replace("\\", "/")
+# The suite tests the *simulation* engine, deliberately and in full. Most of it
+# drives `render_face`, a synthetic drawing that YuNet correctly refuses to find
+# a face in, so a real-engine default would fail 39 tests for the uninteresting
+# reason that the fixtures are not photographs. The real engine has its own
+# module, tests/test_real_engine.py, which pins BIOMETRIC_ENGINE=yunet itself and
+# skips when the model weights are absent. Setting this here - at the top of
+# conftest, before any app import - is what keeps the two suites from leaking
+# into each other.
+os.environ["BIOMETRIC_ENGINE"] = "simulation"
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.database.session import SessionLocal
 from app.main import app
 from app.services.demo.demo_images import render_face, to_base64, to_bytes
 
@@ -83,6 +93,22 @@ DEMO_PASSWORD = "TrayaDemo#2026"
 def client() -> TestClient:
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def db():
+    """A session on the test database, for assertions the API cannot express.
+
+    A fresh session per test, so a test that writes rows cannot leak state into
+    the next one. The API calls in a test go through the app's own session, so
+    anything read here must already be committed - which is exactly the
+    property the enrollment-version test depends on.
+    """
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
 
 
 # --------------------------------------------------------------------------

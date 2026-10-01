@@ -119,15 +119,20 @@ build.
 Some parts of this codebase are deliberately incomplete. The docs state this
 rather than hiding it. The most important caveat:
 
-> **The biometric engine is a simulation, not a production recogniser.** It
-> exists to make the end-to-end flow demonstrable and testable. It must not be
-> used to identify a real person. See
-> [decisions/0001-simulation-biometric-engine.md](decisions/0001-simulation-biometric-engine.md)
-> and the measured results in
-> [backend/services.md](backend/services.md#identification-engine).
+> **Two engines exist, and neither is a validated biometric.** A real one (YuNet
+> + SFace, 128-dimensional) is selected when its weight files are present; the
+> original simulation remains selectable and is what runs when they are not. The
+> real engine's thresholds are **still the simulation's** — nothing is calibrated,
+> and it has been measured on three photographs of two people, which is not an
+> accuracy claim. It must not be used to identify a real person. See
+> [decisions/0008-real-biometric-engine.md](decisions/0008-real-biometric-engine.md),
+> [decisions/0001-simulation-biometric-engine.md](decisions/0001-simulation-biometric-engine.md),
+> and the measurements in [MODEL_EVALUATION.md](MODEL_EVALUATION.md).
 
 `engine_mode` and `demo_mode` are returned on every identification result and
-surfaced by the UI so this can never be mistaken for a working biometric.
+surfaced by the UI, so which engine produced a match is never a guess. Templates
+are tagged with the engine's version, so the two vector spaces can never be
+compared with each other.
 
 Beyond the engine, the docs name several other places where the code does not
 do what you would assume. They are documented as they are, not as intended:

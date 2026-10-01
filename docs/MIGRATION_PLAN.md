@@ -598,6 +598,54 @@ Every existing caller keeps working. `pipeline.py` does not change.
 - Model versioning persists and round-trips.
 - Full backend suite still passes.
 
+### Outcome - Phase 5 complete
+
+**Delivered.** `providers.py` with `YuNet128Provider` (real) and
+`SimulationProvider` behind `FaceEmbeddingProvider`; `engine.py` rewritten behind
+the unchanged `BiometricEngine` interface; five-landmark 112x112 alignment;
+cosine similarity on L2-normalised vectors; `mean_center` and `compare_centered`
+deleted. **No new Python dependency** - OpenCV's DNN runtime runs both models.
+
+**Every gate item passes**, asserted in `backend/tests/test_real_engine.py` and
+elsewhere. Verification run after this phase: **252 passed on Postgres, 228
+passed + 24 skipped on SQLite, `docs:check` passes across 31 pages.**
+
+**Decisions that differ from the plan above, and why.** The plan's step 1 said
+install `onnxruntime`. It was evaluated and **not** installed - it publishes a
+`cp314` wheel and so was available, but `cv2.FaceDetectorYN` and
+`cv2.FaceRecognizerSF` already run both chosen models, and a second inference
+runtime is a dependency with no offsetting benefit. Recorded in
+[ADR 0008](decisions/0008-real-biometric-engine.md) so it is not re-derived.
+
+**Two plan steps are partially done, stated plainly rather than claimed.**
+Step 8 (persist `embedding_model`, `embedding_dimension`,
+`preprocessing_version`, `registration_version` as separate columns) is done as
+**one** column, `algo_version`, carrying the engine's version string
+(`sface-128d-v1` vs `traya-pseudo-embedding-v2`). That is sufficient for
+correctness - it is what stops two vector spaces being compared - and the
+dimension is available from `BiometricEngine().dimension`. Adding the four
+separate columns is a schema migration and belongs with Phase 10's calibration
+work, where the version changes for the first time anyway. Step 10 (the margin
+rule for `MULTIPLE_CANDIDATES`) is **not** done; that status does not exist yet
+and is Phase 6/7 work on the guided-capture path.
+
+**One real bug this phase found and fixed, worth reading.** Enrollment wrote
+`settings.BIOMETRIC_ALGO_VERSION` while `load_enrolled` filtered on
+`get_engine().algo_version`. Under simulation those are the same string, so the
+suite passed; under the real engine they differ, and every template would have
+been invisible to the matcher - enrollment would succeed, the profile would read
+"enrolled", and no match would ever be returned. All four write sites now use the
+live engine's version, and `test_enrolled_templates_carry_the_active_engine_version`
+fails if that ever diverges again.
+
+**What is deliberately not claimed.** The thresholds are the simulation's. The
+real engine's measured figures - 0.8977 same-identity, 0.2792 worst
+cross-identity - come from three photographs of two people and demonstrate the
+pipeline, not accuracy. FAR, FRR, EER, the per-condition breakdown and latency
+remain unmeasured and the results tables in
+[MODEL_EVALUATION.md](MODEL_EVALUATION.md) are still empty by design. Phase 10
+fills them.
+
 ### Risk
 
 **High.** This is where accuracy claims are won or lost. Mitigation: the

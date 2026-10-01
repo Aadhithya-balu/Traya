@@ -135,12 +135,43 @@ decode - so a corrupt file is rejected as 422 rather than crashing the decoder.
 
 | Field | Default | Effect |
 |---|---|---|
-| `BIOMETRIC_ENGINE` | `auto` | `auto` uses Haar when available, else simulation; `simulation` forces simulation; `opencv` requires the cascade. **There is no value that means "trained model".** |
-| `BIOMETRIC_ALGO_VERSION` | `traya-pseudo-embedding-v2` | Stored on every profile and embedding, so a future algorithm change is detectable. |
-| `EMBEDDING_DIM` | `320` | Embedding length. The current engine zero-pads 12 real features to this. |
+| `BIOMETRIC_ENGINE` | `auto` | `auto` uses YuNet when the weight files are present, else simulation with a warning; `yunet` requires the weights and **raises** if they are absent; `simulation` forces simulation. `opencv` is a legacy alias for `yunet` and logs a warning. |
+| `BIOMETRIC_ALGO_VERSION` | `traya-pseudo-embedding-v2` | Version string stored on every profile and embedding. The simulation uses this; the real engine uses its own `sface-128d-v1` and does not read this field. |
+| `EMBEDDING_DIM` | `320` | Embedding length for the **simulation** engine, which zero-pads 12 real features to this. The real engine produces 128 dimensions, declared by the provider. |
 
-The version string says `pseudo` on purpose. Do not rename it to imply a real
-recogniser. See [ADR 0001](../decisions/0001-simulation-biometric-engine.md).
+**`yunet` raising on missing weights is deliberate.** A deployment that asked
+for a recogniser and received the simulation is the worst failure this system
+has, so `auto` logs what it chose and every result carries `engine_mode`.
+`opencv` is retained only so an old `.env` does not silently mean something
+different from what it says; it never produced real detection, because OpenCV 5
+removed the `CascadeClassifier` API it was gated on. See
+[ADR 0001](../decisions/0001-simulation-biometric-engine.md) and
+[ADR 0008](../decisions/0008-real-biometric-engine.md).
+
+`BIOMETRIC_ALGO_VERSION` says `pseudo` on purpose. Do not rename it to imply a
+real recogniser - it belongs to the simulation engine only.
+
+## Face model files
+
+YuNet detection and SFace recognition both load from `FACE_MODELS_DIR`, which
+is **not** in the repository. The weights are fetched by
+`backend/scripts/fetch_biometric_models.py`, which verifies a pinned SHA-256
+against each download and writes a `NOTICE` beside the files recording the
+upstream URL, licence and version.
+
+| Field | Default | Effect |
+|---|---|---|
+| `FACE_MODELS_DIR` | `./.models` | Directory the weight files are read from. Relative to the backend working directory. |
+| `FACE_DETECTOR_MODEL` | `face_detection_yunet_2023mar.onnx` | YuNet weights. MIT licensed. |
+| `FACE_RECOGNIZER_MODEL` | `face_recognition_sface_2021dec.onnx` | SFace weights. Apache-2.0 licensed. |
+| `FACE_DETECTOR_SCORE_THRESHOLD` | `0.6` | Minimum YuNet detection confidence. Below this a candidate face is not returned at all. |
+| `FACE_DETECTOR_NMS_THRESHOLD` | `0.3` | Non-maximum suppression IoU. |
+| `FACE_DETECTOR_TOP_K` | `5000` | YuNet's internal candidate cap, which bounds NMS cost on a large frame. |
+
+Raising `FACE_DETECTOR_SCORE_THRESHOLD` trades recall for precision: at 0.6 the
+three test photographs detect at 0.90, 0.86 and 0.95. It is a detection knob,
+not a matching threshold - it decides whether a face is *seen*, while the
+confidence thresholds below decide whether an *identity* is claimed.
 
 ## Confidence thresholds
 
@@ -158,9 +189,13 @@ defaults on any error. So editing a threshold through
 `PUT /api/admin/settings/{key}` changes matching behaviour live, with no
 restart - and survives a redeploy with the old value intact.
 
-Because the engine is a simulation, these numbers describe a brightness
-comparison. They are not validated biometric thresholds and must not be
-presented as such.
+**These thresholds are not calibrated for either engine, and the seeded values
+in particular are the simulation's.** On the real engine they happen to sit in a
+plausible place - measured same-identity 0.8977, cross-identity at most 0.2792 -
+but three photographs of two people cannot support a false-match rate. Phase 10
+calibrates them on a real corpus. Until then do not present these numbers as
+validated biometric thresholds, and note that seeded `system_settings` rows
+override the env vars, so editing `.env` changes nothing on a seeded database.
 
 ## Sessions and retention
 

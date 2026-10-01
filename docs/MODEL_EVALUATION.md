@@ -1,12 +1,13 @@
 # TRAYA Model Evaluation
 
-[docs/README.md](README.md) · **Status: methodology defined, results not yet
-measured.** This page exists so the numbers have a home and a fixed format
-*before* they are produced, which is what stops an unmeasured claim from
-entering the README.
+[docs/README.md](README.md) · **Status: methodology defined; real-engine smoke
+tests measured; accuracy results not yet measured.** This page exists so the
+numbers have a home and a fixed format *before* they are produced, which is what
+stops an unmeasured claim from entering the README.
 
-Current state: the engine is a simulation. See
-[AUDIT.md](AUDIT.md#the-biometric-engine-exactly-as-written) and
+Current state: two engines exist behind one interface. A real one (YuNet plus
+SFace 128D) and the original simulation, selected by `BIOMETRIC_ENGINE`. See
+[ADR 0008](decisions/0008-real-biometric-engine.md) and
 [ADR 0001](decisions/0001-simulation-biometric-engine.md).
 
 ## Rules for this page
@@ -23,9 +24,12 @@ Three rules, taken from the rebuild prompt and enforced by review:
 A claim in any other document that contradicts this page is a bug in that
 document.
 
-## Why the current engine cannot be evaluated as a biometric
+## Why the simulation engine cannot be evaluated as a biometric
 
-Recorded here so the numbers below are never quoted out of context:
+Recorded here so the numbers below are never quoted out of context. **This
+section describes the simulation, which still exists and is still selectable
+with `BIOMETRIC_ENGINE=simulation`.** It does not describe the real engine; see
+[Phase 5 measurements](#phase-5-measurements-real-engine) below.
 
 | Property | Value |
 | --- | --- |
@@ -37,13 +41,89 @@ Recorded here so the numbers below are never quoted out of context:
 | Measured impostor similarity | **up to 0.817** |
 | Impostor pairs above the 0.62 review threshold | **6 of 30** |
 
-A 0.817 impostor score is **above the 0.82 high-confidence threshold's
-neighbourhood** and far above the 0.62 review threshold. Two demo identities
-collide outright. This is a brightness comparator, not a biometric, and no
-accuracy figure derived from it means anything about face recognition.
+A 0.817 impostor score is far above the 0.62 review threshold. Two demo
+identities collide outright. This is a brightness comparator, not a biometric,
+and no accuracy figure derived from it means anything about face recognition.
 
-**Therefore there are no baseline rows in the results tables below.** They are
-empty because they are not measurable yet, not because they were omitted.
+**Therefore the results tables below have no simulation baseline rows.** They
+are empty because the protocol has not been run, not because rows were omitted.
+
+## Phase 5 measurements: real engine
+
+**These are smoke tests of a pipeline, not an accuracy evaluation.** Three
+photographs of two people cannot produce a false-accept rate. They are recorded
+here because rule 1 says a number does not appear without the command that made
+it, and because the alternative - a real recogniser in the codebase with no
+recorded observations - is how unmeasured claims get made later.
+
+Engine under test: **YuNet detection + SFace 128D on the OpenCV DNN runtime**
+([ADR 0008](decisions/0008-real-biometric-engine.md)). Corpus:
+`backend/tests/fixtures/faces/`, three photographs (`same-person-a`,
+`same-person-b` are one person, `other-person` is a second), Apache-2.0 from the
+OpenCV sample set.
+
+Reproduce everything in this section:
+
+```
+cd backend; .venv\Scripts\python.exe -m pytest tests\test_real_engine.py
+```
+
+| Property | Value | Asserted by |
+| --- | --- | --- |
+| Embedding dimension | **128**, every coordinate non-zero | `test_embedding_is_128_dimensional_and_not_padded` |
+| L2 norm | 1.0 (normalised) | `test_embedding_is_l2_normalised` |
+| Metric | cosine similarity, [0, 1] | `test_similarity_is_symmetric_and_bounded` |
+| Alignment | 5 landmarks to a 112x112 template, `estimateAffinePartial2D` | `test_alignment_corrects_roll` |
+| Same-identity similarity | **0.8977** | `test_same_identity_beats_cross_identity` |
+| Cross-identity similarity | **0.2573** and **0.2792** | same test |
+| Separation | same minus worst cross = **0.6185** | same test |
+| Descriptor version | `sface-128d-v1` | `test_model_provenance_is_pinned` |
+| Preprocessing version | `aligned112-rgb-v1` | same test |
+
+### Alignment ablation
+
+The measured reason alignment exists, on a rolled copy of the test face with
+the face region upscaled so detection is not the limiting factor:
+
+| Roll | Aligned | Unaligned box crop |
+| --- | --- | --- |
+| 0 degrees | 1.0000 | 0.3791 |
+| 10 degrees | 0.9529 | 0.4732 |
+| 20 degrees | 0.9192 | 0.3581 |
+
+Aligned similarity holds above 0.91 out to 20 degrees; the unaligned crop never
+exceeds 0.48. Without alignment the descriptor would be largely a function of
+how the phone was held. Asserted in `test_alignment_corrects_roll`.
+
+### Pose: a measured bias, and what it forced
+
+Three frontal faces from three different people, raw landmark yaw proxy:
+**+0.4292, +0.4512, +0.5347**. All three read "left" if taken absolutely, and
+all three are far past the `TURNED_OFFSET = 0.03` threshold. The bias is
+per-identity (a nose tip sits off the midpoint of its own eyes), so:
+
+- a landmark reading **with no baseline returns `unknown`**, not a direction;
+- with a baseline from the same person, both axes are read as a **delta**, so
+  the bias cancels.
+
+Asserted in `test_landmark_yaw_is_not_absolute_and_says_unknown_without_a_baseline`.
+Roll needs no baseline and is reported in degrees. The simulation's asymmetry
+reader is unchanged and is a different measurement.
+
+### What is still missing, and why no threshold is claimed
+
+The real engine's measured scores happen to straddle the seeded thresholds
+comfortably - 0.8977 genuine against at most 0.2792 impostor, versus
+`HIGH_CONFIDENCE_THRESHOLD = 0.82` and `REVIEW_THRESHOLD = 0.62`. **This is not
+evidence that those thresholds are correct.** It is evidence about three
+phototographs. The tables below stay empty until the protocol above is run on a
+corpus with enough identities to compute FAR, and the seeded thresholds in
+`system_settings` remain the simulation's until then.
+
+Specifically not yet measured: FAR and FRR at any threshold, EER, the
+per-condition breakdown across lighting, pose, expression, distance, occlusion,
+resolution, glasses and camera, latency p50/p95, and the quality-gate's own
+precision. Those are Phase 10.
 
 ## Validation dataset
 
@@ -120,15 +200,22 @@ visible rather than assumed.
 
 ## Results
 
-Empty until measured. Reproduce the commands before filling any cell.
+**Every cell below is still `_pending_`, and that is the honest state.** The
+[Phase 5 measurements](#phase-5-measurements-real-engine) above are not results
+in this sense: they are three photographs of two people, which is enough to prove
+the pipeline runs and the descriptor separates two identities, and nowhere near
+enough to compute a rate. The gap between those two statements is the whole
+subject of Phase 10.
+
+Reproduce the commands before filling any cell.
 
 ### Headline
 
 | Metric | Value | Reproduce with |
 | --- | --- | --- |
-| Model | _pending_ | _pending_ |
-| Embedding dimension | _pending_ | _pending_ |
-| Metric | _pending_ | _pending_ |
+| Model | SFace 128D + YuNet (from [Phase 5](#phase-5-measurements-real-engine)) | `pytest tests/test_real_engine.py` |
+| Embedding dimension | 128 | same |
+| Metric | cosine similarity | same |
 | Genuine trials | _pending_ | _pending_ |
 | Impostor trials | _pending_ | _pending_ |
 | FAR @ auto-accept | _pending_ | _pending_ |

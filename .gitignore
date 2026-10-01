@@ -23,6 +23,13 @@ uploads/
 # Build output
 frontend/dist/
 
+# Biometric model weights. 38 MB of third-party ONNX binaries, fetched by
+# backend/scripts/fetch_biometric_models.py, which verifies a pinned SHA-256 and
+# writes a NOTICE beside them. Deliberately not committed: a recogniser is only
+# real if the weights are actually on disk, so a clone without them is a
+# simulation until the fetch script is run, and that state is what `auto` reports.
+backend/.models/
+
 # Test / coverage
 .pytest_cache/
 .coverage

@@ -86,10 +86,11 @@ def enroll(
     profile.enrolled_at = datetime.now(UTC)
     db.flush()
 
+    algo_version = get_engine().algo_version
     repo.replace_embeddings(
         profile,
         [encrypt_bytes(serialize_embedding(vec)) for vec in vectors],
-        settings.BIOMETRIC_ALGO_VERSION,
+        algo_version,
     )
     db.commit()
 
@@ -97,7 +98,7 @@ def enroll(
         db,
         user.id,
         "biometric.enrolled",
-        details={"samples": len(vectors), "algo": settings.BIOMETRIC_ALGO_VERSION},
+        details={"samples": len(vectors), "algo": algo_version},
         commit=False,
     )
     db.commit()
@@ -106,7 +107,7 @@ def enroll(
         "status": "enrolled",
         "num_samples": len(vectors),
         "image_reports": reports,
-        "algo_version": settings.BIOMETRIC_ALGO_VERSION,
+        "algo_version": algo_version,
     }
 
 

@@ -68,9 +68,33 @@ class Settings(BaseSettings):
     ALLOWED_IMAGE_MIMES: list[str] = ["image/jpeg", "image/png", "image/webp"]
 
     # Biometric engine
-    BIOMETRIC_ENGINE: str = "auto"  # auto | simulation | opencv
+    #   auto       real provider if the model files are present, else simulation
+    #   yunet      require the real provider; fail loudly if models are missing
+    #   simulation force the deterministic provider (tests, demo, no models)
+    # `opencv` is accepted as an alias for `yunet` because it was the value that
+    # used to suggest a real detector. It never produced one: OpenCV 5 removed the
+    # cascade API the old code gated on, so `opencv` silently ran the simulation
+    # while reporting otherwise. Aliasing it means an existing .env gets the real
+    # engine rather than a validation error.
+    BIOMETRIC_ENGINE: str = "auto"  # auto | yunet | simulation
+    # The simulation provider's algo version. The real provider carries its own
+    # version on the provider object (`sface-128d-v1`), because a stored embedding
+    # is only comparable against one produced by the same build, and one setting
+    # cannot name both. Kept at its existing value so the seeded demo templates
+    # still match the engine that created them.
     BIOMETRIC_ALGO_VERSION: str = "traya-pseudo-embedding-v2"
     EMBEDDING_DIM: int = 320
+    # Where the ONNX weights live. Fetched, not committed: see
+    # scripts/fetch_biometric_models.py, which pins URL and SHA-256 for both.
+    FACE_MODELS_DIR: str = "./.models"
+    FACE_DETECTOR_MODEL: str = "face_detection_yunet_2023mar.onnx"
+    FACE_RECOGNIZER_MODEL: str = "face_recognition_sface_2021dec.onnx"
+    # YuNet's own knobs. The score threshold is the detector's confidence, not a
+    # match score; 0.6 keeps the false-positive rate low on the frames this app
+    # sees while still finding a face at 112px in a 1080p frame.
+    FACE_DETECTOR_SCORE_THRESHOLD: float = 0.6
+    FACE_DETECTOR_NMS_THRESHOLD: float = 0.3
+    FACE_DETECTOR_TOP_K: int = 5000
 
     # Confidence thresholds
     HIGH_CONFIDENCE_THRESHOLD: float = 0.82

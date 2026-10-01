@@ -31,19 +31,29 @@ class EnrolledProfile:
 class RecognitionRepository(BaseRepository[BiometricProfile]):
     model = BiometricProfile
 
-    def enrolled_profiles(self) -> list[EnrolledProfile]:
+    def enrolled_profiles(self, algo_version: str | None = None) -> list[EnrolledProfile]:
         """Every enrolled identity, with templates decrypted for matching.
+
+        ``algo_version`` is a filter, not a label. The simulation provider emits
+        320-dimensional vectors and the real one emits 128, and comparing across
+        the two is meaningless rather than merely inaccurate - the cosine of a
+        128-vector and a 320-vector does not exist. So the matcher asks for the
+        templates its own engine produced and gets only those. Passing ``None``
+        returns every profile regardless of build, which is what an operator
+        inspecting the database wants and what a matcher must never do.
 
         Profiles whose embeddings cannot be decrypted under the current
         encryption key are skipped rather than failing the whole scan, so one
         stale record cannot take down identification.
         """
-        rows = (
+        query = (
             self.db.query(BiometricProfile, User)
             .join(User, User.id == BiometricProfile.user_id)
             .filter(BiometricProfile.status == "enrolled", User.is_active.is_(True))
-            .all()
         )
+        if algo_version is not None:
+            query = query.filter(BiometricProfile.algo_version == algo_version)
+        rows = query.all()
         profiles: list[EnrolledProfile] = []
         for bio, user in rows:
             vectors = self.decrypt_templates(bio.id)

@@ -138,7 +138,7 @@ def start_enrollment(db: Session, user: User) -> BiometricEnrollment:
         total_steps=len(POSE_STEPS),
         accepted_samples=0,
         rejected_samples=0,
-        algo_version=settings.BIOMETRIC_ALGO_VERSION,
+        algo_version=get_engine().algo_version,
         sample_reports=[],
     )
     db.add(enrollment)
@@ -286,11 +286,15 @@ def complete_enrollment(
     profile.enrolled_at = datetime.now(UTC)
     db.flush()
 
+    # The version the matcher will look for. Taken from the live engine, not from
+    # settings: the two differ on the real engine, and tagging a 128D SFace
+    # descriptor with the simulation's string would make it invisible to
+    # load_enrolled, so every enrollment would silently fail to match.
+    algo_version = get_engine().algo_version
+
     # Re-enrollment replaces the previous templates outright, so a withdrawn
     # consent can never leave an older embedding behind.
-    repo.replace_embeddings(
-        profile, [s.embedding_blob for s in samples], settings.BIOMETRIC_ALGO_VERSION
-    )
+    repo.replace_embeddings(profile, [s.embedding_blob for s in samples], algo_version)
     profile.num_samples = len(samples)
 
     enrollment.status = "completed"
@@ -304,7 +308,7 @@ def complete_enrollment(
         resource_id=profile.id,
         details={
             "samples": len(samples),
-            "algo": settings.BIOMETRIC_ALGO_VERSION,
+            "algo": algo_version,
             "guided": True,
             "steps": STEP_KEYS,
         },
@@ -315,7 +319,7 @@ def complete_enrollment(
     return {
         "status": "enrolled",
         "num_samples": len(samples),
-        "algo_version": settings.BIOMETRIC_ALGO_VERSION,
+        "algo_version": algo_version,
         "enrolled_at": profile.enrolled_at,
         "steps_completed": sorted({s.step_key for s in samples}),
     }

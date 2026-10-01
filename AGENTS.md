@@ -21,20 +21,25 @@ the owning docs page change with it.
 
 **The 30-second version:** this is a well-built prototype whose centre is a
 placeholder. The documentation, tests, API design, RBAC, audit trail and design
-system are real and good — keep all of it. **There is no real face detection and
-no real face embedding.** Everything else in this plan is built around fixing
-that honestly.
+system are real and good — keep all of it. **As of Phase 5 there is a real face
+detector and a real 128-dimensional face embedding** (YuNet + SFace, see
+[ADR 0008](docs/decisions/0008-real-biometric-engine.md)). **The thresholds are
+still the simulation's, and nothing is calibrated yet.** Everything else in this
+plan is built around measuring that honestly.
 
 ---
 
 ## 1. THE ONE THING YOU MUST NOT GET WRONG
 
-> **`opencv-python` is installed, and face detection still does not run.**
+> **A real recogniser exists. It is only real if the model weights are on disk,
+> and which engine ran is never a guess.**
 
 This is stated here first because it is the trap that makes reasonable agents
-wrong.
+wrong, and Phase 5 changed the shape of the trap.
 
-`engine.py:37` decides the engine mode with
+### What was true before Phase 5, and is still true of the simulation
+
+`engine.py` used to decide the engine mode with
 `bool(hasattr(cv2, "CascadeClassifier"))`. Measured on this machine:
 
 ```
@@ -44,46 +49,76 @@ os.listdir(cv2.data.haarcascades)  -> ['__init__.py', '__pycache__']   (EMPTY)
 hasattr(cv2, 'CascadeClassifier')  -> False     (REMOVED in OpenCV 5)
 ```
 
-Two independent reasons the real path never executes:
+Two independent reasons the old real path never executed: **`CascadeClassifier`
+was removed in OpenCV 5**, and **the cascade directory contains no `.xml` files**
+even if the class existed. So the guard was never entered, and
+`BIOMETRIC_ENGINE=opencv` fell through to `_simulate_detect` and reported
+`source="simulation"` anyway. `opencv` never meant what it said.
 
-1. **`cv2.CascadeClassifier` was removed in OpenCV 5.** The classic Haar cascade
-   API is gone, so `_HAS_CV2` is `False`.
-2. **The cascade directory contains no `.xml` files.** There is nothing to load
-   even if the class existed.
+That is why the simulation embedding was twelve real numbers zero-padded to 320
+(`np.pad(features, (0, EMBEDDING_DIM - features.size))`) — not 128D, not 320D,
+twelve numbers and 308 zeros. That code still exists, as
+`SimulationProvider`, and is still what `BIOMETRIC_ENGINE=simulation` runs.
 
-So the guard at `engine.py:282` is never entered:
+### What is true now
 
-```python
-if _HAS_CV2 and settings.BIOMETRIC_ENGINE in ("auto", "opencv"):
+**`providers.py` holds two implementations of one interface** —
+`YuNet128Provider` (real: `cv2.FaceDetectorYN` + `cv2.FaceRecognizerSF`, five
+landmarks, 112x112 alignment via `estimateAffinePartial2D`, 128D L2-normalised
+descriptor, cosine similarity) and `SimulationProvider` (the old engine).
+`get_provider()` resolves one, caches it per process, and logs the choice.
+
+**The weights are not in the repository.** They live in `backend/.models/`,
+fetched by `backend/scripts/fetch_biometric_models.py`, which verifies a pinned
+SHA-256 per file and writes a `NOTICE`. So "does TRAYA detect faces?" is
+answerable only by asking, not by reading:
+
+```
+cd backend; .venv\Scripts\python.exe -c "from app.services.identification import providers; print(providers.models_present())"
 ```
 
-**Setting `BIOMETRIC_ENGINE=opencv` in `.env` does not give you real detection.**
-It satisfies the second clause of that `and` and nothing about the first. The
-engine falls through to `_simulate_detect` and reports `source="simulation"`
-anyway. Do not "fix" this by changing the setting.
+### The three rules that follow
 
-**What the engine actually is** — `extract_embedding`, `engine.py:336`:
+1. **Never set `BIOMETRIC_ENGINE=opencv` expecting anything.** It is now an
+   alias for `yunet` and logs a warning on every resolution. It exists only so an
+   old `.env` does not silently keep meaning "give me a simulation".
+2. **`yunet` raises if the weights are missing; `auto` falls back to simulation
+   *and says so in the log*.** That asymmetry is deliberate: a deployment that
+   asked for a recogniser and silently got a brightness comparator is the worst
+   failure this project has.
+3. **`settings.EMBEDDING_DIM` is 320 and describes only the simulation.** The
+   real engine is 128D. Anything that sizes a buffer or stores a vector must
+   read `BiometricEngine().dimension`, which reads through to the active
+   provider — not the setting.
 
-```python
-if features.size < settings.EMBEDDING_DIM:
-    features = np.pad(features, (0, settings.EMBEDDING_DIM - features.size))
-```
+**And the disclosure still does the work.** Every result carries `engine_mode`
+and `demo_mode`; templates are tagged with the engine's version string
+(`sface-128d-v1` vs `traya-pseudo-embedding-v2`) so the two vector spaces are
+never compared; and `similarity()` raises on a dimension mismatch rather than
+returning a meaningless low score. **What is still missing is calibration** —
+the seeded thresholds are the simulation's, and
+[docs/MODEL_EVALUATION.md](docs/MODEL_EVALUATION.md) has the real engine's
+measured smoke-test figures and an explicit list of what is not yet measured.
 
-Twelve real numbers (skin mean, skin std, hair darkness, three eye bands, brow,
-mouth, beard, symmetry, aspect, luminance), **zero-padded to 320**. That is the
-entire embedding. Not 128D. Not 320D. Twelve numbers and 308 zeros.
+**Also still absent: no face model beyond these two.** No liveness detection, no
+deepfake defence, no ensemble. And the *asymmetry* pose reader is still the
+simulation's brightness heuristic — the real engine reads pose from landmarks
+and returns `unknown` for horizontal without a baseline.
 
-**Consequence, and it matters:** nothing is wrong with the *design*. `BiometricEngine`
-exposes `process` / `embed` / `pose` / `similarity` / `is_simulation`, and that
-interface is correct and must be preserved. What is wrong is the implementation
-behind it. A real provider drops in behind the same interface and every caller
-keeps working.
+---
 
-**Also absent: face alignment.** There is no alignment code anywhere in the
-backend. No landmarks, no `estimateAffinePartial2D`, no 68-point or 5-point
-model. `PoseEstimate` (`engine.py:398`) is normalised brightness asymmetry and
-its own docstring says so. Real alignment is a Phase 5 deliverable, not an
-existing feature.
+## 1b. WHAT THE SIMULATION STILL IS, FOR THE RECORD
+
+**Nothing was ever wrong with the design.** `BiometricEngine` exposes
+`process` / `embed` / `pose` / `similarity` / `is_simulation`, and that interface
+is correct and must be preserved. Phase 5 kept it and put `YuNet128Provider`
+behind it, so every existing caller keeps working and no caller had to change.
+
+**The simulation's own limits still stand, for anyone who selects it:**
+`SimulationProvider` still produces twelve brightness statistics padded to 320,
+still has no landmarks and no alignment, and its `PoseEstimate` is still
+normalised brightness asymmetry. Its measured impostor similarity still reaches
+0.817. Selecting it is a deliberate choice, made with `engine_mode` visible.
 
 ---
 
@@ -94,18 +129,20 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 
 | Fact | Value |
 |---|---|
-| Backend tests | **235 passed** on Postgres, **211 passed + 24 skipped** on SQLite after Phase 4 |
-| Backend tests on real Postgres | **235 passed**, no skips, ~77s. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
+| Backend tests | **251 passed** on Postgres, **227 passed + 24 skipped** on SQLite after Phase 5 |
+| Backend tests on real Postgres | **251 passed**, no skips, ~353s. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
 | Hosted Supabase | **Live and verified.** PostgreSQL 17.11, 22 tables, RLS on 22/22 with 19 policies, 7 roles / 18 permissions, emergency flow HIGH_CONFIDENCE 0.995 |
 | Frontend typecheck | **passes**, exit 0, strict TS |
-| `npm run docs:check` | **passes**, 30 pages |
+| `npm run docs:check` | **passes**, 31 pages |
 | Endpoints | **47** across 7 routers |
 | Tables | **22** in `public` (19 ORM models plus `alembic_version` and the two association tables), 4 Alembic migrations |
 | Roles / permissions | **7** / **18** |
 | Default database | **SQLite** (`sqlite:///./traya.db`) |
-| `EMBEDDING_DIM` | **320** (12 real + 308 zeros) |
-| Thresholds | HIGH 0.82, REVIEW 0.62, FALLBACK_FACE 0.60, BOOST 0.05/0.06 |
-| Max impostor similarity | **0.817** — 6 of 30 impostor pairs exceed the 0.62 review threshold |
+| `EMBEDDING_DIM` | **320** — describes the **simulation only**. The real engine is 128D; read `BiometricEngine().dimension` |
+| Real engine | **YuNet + SFace 128D**, weights in `backend/.models/`, **not committed** |
+| Real engine measured | same-identity **0.8977**, cross-identity **0.2573 / 0.2792**, 128 non-zero coords, norm 1.0. Three photographs, two people — **not an accuracy claim** |
+| Thresholds | HIGH 0.82, REVIEW 0.62, FALLBACK_FACE 0.60, BOOST 0.05/0.06 — **still the simulation's, not calibrated** |
+| Max impostor similarity (simulation) | **0.817** — 6 of 30 impostor pairs exceed the 0.62 review threshold |
 | Rows in `face_embeddings` / pgvector | **none** — the column does not exist |
 | RLS | **Enabled on 22 of 22, and it filters.** Policies are written for `traya_api`, a `NOLOGIN` role; `anon` gets 401 on every app table. **The application connects as table owner and bypasses its own policies** — `FORCE` is deliberately off. See [ADR 0007](docs/decisions/0007-rls-claims-and-live-role-resolution.md) and [SECURITY_MODEL.md](docs/SECURITY_MODEL.md#rls-is-enabled-on-all-22-tables-and-it-filters) |
 | Storage buckets | **2, private**, created on the hosted project. Retention policies still to set in the dashboard |
@@ -116,16 +153,23 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 
 | Available | Missing |
 |---|---|
-| `cv2` 5.0.0 (no cascade API) | `dlib`, `face_recognition`, `insightface` |
+| `cv2` 5.0.0 (`FaceDetectorYN` + `FaceRecognizerSF`, no cascade API) | `dlib`, `face_recognition`, `insightface` |
 | `numpy` 2.5.2, `PIL` 12.3.0 | `onnxruntime`, `mediapipe`, `torch` |
 | `psycopg` 3.3.4 | `supabase`, `pgvector` |
 
-**Only NumPy and Pillow are usable for ML as configured.** Any real 128D
-embedding needs an install first. Phase 5 selects **YuNet** (`cv2.FaceDetectorYN`,
-already available, needs only a model file) plus an **ONNX 128D embedding model**
-via `onnxruntime` — wheel-only, no compiler on Windows. ArcFace-512D would be
-more accurate and is **rejected because the 128D requirement is explicit**; it
-must still be measured and recorded, not dismissed.
+**NumPy, Pillow and the OpenCV DNN runtime are what Phase 5 uses, and no new
+dependency was added.** `cv2.FaceDetectorYN` and `cv2.FaceRecognizerSF` are both
+present in the installed OpenCV 5.0.0, so YuNet and SFace need only their weight
+files.
+
+`onnxruntime` 1.30.0 *was* evaluated and **deliberately not used**: it publishes a
+`cp314` win_amd64 wheel, so it was installable, but OpenCV's DNN runtime already
+runs both chosen models, and a second inference runtime is a dependency with no
+offsetting benefit. Recorded in [ADR 0008](docs/decisions/0008-real-biometric-engine.md)
+so it is not re-derived. `dlib`, `face_recognition`, `insightface` and `torch`
+remain unusable on Python 3.14.2 without a compiler. ArcFace-512D would score
+higher and is **rejected because the 128D requirement is explicit**; it must
+still be measured and recorded, not dismissed.
 
 ### The bugs that will bite you
 
@@ -370,7 +414,7 @@ method and exported TypeScript type **must be named on its owning page.**
 | [docs/frontend/state-and-data.md](docs/frontend/state-and-data.md) | Contexts, hooks, client, types |
 | [docs/frontend/design-system.md](docs/frontend/design-system.md) | Tokens, spacing, theme, i18n |
 | [docs/operations/README.md](docs/operations/README.md) | Dev, seeding, testing, deploying |
-| [docs/decisions/README.md](docs/decisions/README.md) | ADRs 0001–0007 — why the system is the way it is |
+| [docs/decisions/README.md](docs/decisions/README.md) | ADRs 0001–0008 — why the system is the way it is |
 
 ### Writing rules
 
@@ -411,8 +455,19 @@ access is scoped to the incident's subject, and the two table-reading helpers ar
 `SECURITY DEFINER` (as invoker functions they read nothing and silently deny).
 Four escalating-tamper tests are in `backend/tests/test_auth.py`.
 
-1. **The biometric engine is a simulation.** See §1. Recorded in
-   [ADR 0001](docs/decisions/0001-simulation-biometric-engine.md).
+**Fixed in Phase 5** — do not re-report: there is a real face detector and a real
+128D face embedding (YuNet + SFace, five-landmark alignment, cosine similarity),
+selected by `BIOMETRIC_ENGINE`; templates carry the engine's version so the two
+vector spaces cannot be compared; a dimension mismatch raises instead of
+returning a low score; and `opencv` is a warned alias rather than a lie. Details
+in [ADR 0008](docs/decisions/0008-real-biometric-engine.md).
+
+1. **The thresholds are the simulation's, and nothing is calibrated.** The real
+   engine exists and is measured on three photographs of two people
+   (0.8977 same, 0.2792 worst cross), which is a smoke test and **not** an
+   accuracy claim. FAR, FRR, EER, the per-condition breakdown and latency are
+   unmeasured; the seeded `system_settings` values are unchanged from Phase 0.
+   See §1 and [docs/MODEL_EVALUATION.md](docs/MODEL_EVALUATION.md).
 2. **No client path uses the RLS policies, and there is no pgvector.** RLS is on
    for all 22 tables with 19 policies written for the `traya_api` role, and the
    hosted `public` schema is verified as filtering. But `traya_api` is `NOLOGIN`
@@ -438,20 +493,26 @@ Four escalating-tamper tests are in `backend/tests/test_auth.py`.
    build. `backend/tests/test_frontend_contract.py` exists to catch client/server
    literal mismatches — put new ones there.
 8. **Tokens live in `localStorage`** and there is no CSP.
-9. **No face alignment exists.** Nothing in the backend aligns a face.
-10. **No browser, camera or E2E run has happened.** The emergency flow is fixed
-    by contract test, not observed working in a hand.
+9. **No browser, camera or E2E run has happened.** The emergency flow is fixed
+   by contract test, not observed working in a hand. The real engine has been run
+   against three photographs, never against a live camera.
 
 ---
 
 ## 8. WHAT NOT TO DO
 
 1. **Do not claim a feature works unless you ran it and saw it work.**
-2. **Do not present the simulation as a biometric.** Every result already carries
-   `engine_mode` and `demo_mode`; keep that disclosure impossible to miss.
+2. **Do not present the simulation as a biometric, and do not present the real
+   engine as a validated one.** Every result carries `engine_mode` and
+   `demo_mode`; keep that disclosure impossible to miss. A real detector does not
+   make the thresholds right.
 3. **Do not claim accuracy without a measurement.** Numbers go in
    [docs/MODEL_EVALUATION.md](docs/MODEL_EVALUATION.md) with the command that
    produced them. When a result is bad, publish it.
+3a. **Do not pin `BIOMETRIC_ENGINE=yunet` in `conftest.py` and expect the suite
+   to pass.** The suite drives `render_face`, and YuNet correctly finds no face
+   in a synthetic drawing. The suite pins `simulation`; the real engine is
+   tested in `tests/test_real_engine.py` against photographs.
 4. **Do not claim TRAYA is globally unique.** Prior art exists. A formal
    gap analysis is future work.
 5. **Do not add a "128-bit embedding".** It is **128-dimensional**. A 128D
