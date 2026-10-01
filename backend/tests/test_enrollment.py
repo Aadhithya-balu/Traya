@@ -7,6 +7,7 @@ absolute yaw/pitch from luminance asymmetry is not a measurable claim.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from app.services.demo.demo_images import render_face, to_base64
@@ -190,6 +191,202 @@ def test_sample_rejects_junk_image(client):
     state = start(client, user["headers"])
     r = sample(client, user["headers"], state["enrollment_id"], "not base64!!!")
     assert r.status_code in (400, 422)
+
+
+def test_complete_stores_one_centroid_not_the_raw_samples(client, db):
+    """The stored template is the centroid of the samples, L2-normalised.
+
+    Storing every sample means the matcher takes a max over N templates, and a
+    max is not a description of the person - it is a description of the luckiest
+    sample. The centroid is what was actually enrolled, so it is what is stored.
+    """
+    from app.models import BiometricEmbedding, BiometricProfile
+    from app.security.crypto import decrypt_bytes
+
+    user = make_user(client)
+    consent(client, user["headers"])
+    state = start(client, user["headers"])
+    for _ in range(3):
+        sample(client, user["headers"], state["enrollment_id"], good())
+
+    r = client.post(
+        f"/api/biometric/enrollment/{state['enrollment_id']}/complete",
+        headers=user["headers"],
+    )
+    assert r.status_code == 200, r.text
+
+    profile = (
+        db.query(BiometricProfile)
+        .filter_by(user_id=user["user"]["id"], status="enrolled")
+        .one()
+    )
+    rows = db.query(BiometricEmbedding).filter_by(profile_id=profile.id).all()
+    assert len(rows) == 1, f"expected a single centroid template, stored {len(rows)}"
+
+    vector = np.frombuffer(decrypt_bytes(rows[0].embedding_blob), dtype=np.float64)
+    assert float(np.linalg.norm(vector)) == pytest.approx(1.0, abs=1e-9), (
+        "a centroid must be unit length, because the matcher uses cosine"
+    )
+    # num_samples still reports what the person contributed, not how many rows
+    # that became.
+    assert r.json()["num_samples"] == 3
+
+
+def test_complete_reports_intra_person_spread(client):
+    """Every accepted sample was individually fine; only they can disagree.
+
+    The response carries how closely the person's own samples agreed, because
+    that number is not recoverable from the stored template later and it is the
+    first thing to look at when a match goes wrong.
+    """
+    user = make_user(client)
+    consent(client, user["headers"])
+    state = start(client, user["headers"])
+    for _ in range(3):
+        sample(client, user["headers"], state["enrollment_id"], good())
+
+    r = client.post(
+        f"/api/biometric/enrollment/{state['enrollment_id']}/complete",
+        headers=user["headers"],
+    )
+    consistency = r.json()["consistency"]
+    assert consistency["pairs"] == 3, "3 samples give 3 unordered pairs"
+    assert consistency["min_pairwise"] <= consistency["mean_pairwise"]
+    assert consistency["threshold"] > 0
+    assert consistency["min_pairwise"] >= consistency["threshold"]
+
+
+def test_complete_refuses_an_inconsistent_capture_set(client):
+    """Four individually good photos of two different faces must not commit.
+
+    Every sample here passes the per-image quality gates, which is exactly why
+    this check has to exist: the gates cannot see that the images are of
+    different people. Without this, an enrollment assembled carelessly becomes a
+    template that represents nobody.
+    """
+    user = make_user(client)
+    consent(client, user["headers"])
+    state = start(client, user["headers"])
+
+    # Two of one identity, two of another, each rendered to pass the gates.
+    other = to_base64(render_face(seed=7, identity="a-completely-different-person"))
+    for image in (b64(), b64(), other, other):
+        s = sample(client, user["headers"], state["enrollment_id"], image)
+        assert s.status_code == 200
+        # Every sample must have been accepted on quality. If any were rejected
+        # the 422 below would be the minimum-samples guard rather than the
+        # consistency check, and the test would pass for the wrong reason.
+        assert s.json()["verdict"]["accepted"], s.text
+
+    r = client.post(
+        f"/api/biometric/enrollment/{state['enrollment_id']}/complete",
+        headers=user["headers"],
+    )
+    assert r.status_code == 422
+    assert "same person" in r.text.lower() or "do not look like" in r.text.lower()
+
+    status = client.get("/api/biometric/status", headers=user["headers"]).json()
+    assert status["status"] != "enrolled", "an inconsistent set must not enroll"
+
+
+# ------------------------------------------------------------------ retention
+def test_complete_purges_the_raw_sample_vectors(client, db):
+    """The pending vectors must not outlive the centroid built from them.
+
+    Each accepted capture stored its own encrypted 128D descriptor. Those rows
+    exist only to compute a centroid; leaving them behind would keep N extra
+    biometric vectors at rest forever, per person, and the audit trail already
+    has what it needs in the enrollment's per-sample reports.
+    """
+    from app.models import BiometricEnrollmentSample
+
+    user = make_user(client)
+    consent(client, user["headers"])
+    state = start(client, user["headers"])
+    for _ in range(3):
+        sample(client, user["headers"], state["enrollment_id"], good())
+
+    assert (
+        db.query(BiometricEnrollmentSample)
+        .filter_by(enrollment_id=state["enrollment_id"])
+        .count()
+        == 3
+    )
+
+    r = client.post(
+        f"/api/biometric/enrollment/{state['enrollment_id']}/complete",
+        headers=user["headers"],
+    )
+    assert r.status_code == 200, r.text
+
+    remaining = (
+        db.query(BiometricEnrollmentSample)
+        .filter_by(enrollment_id=state["enrollment_id"])
+        .count()
+    )
+    assert remaining == 0, f"{remaining} sample vector(s) outlived the template"
+
+
+def test_complete_purges_rejected_samples_too(client, db):
+    """A rejected capture's vector is purged on the same terms as an accepted one.
+
+    A sample the engine refused is still someone's biometric, and it was still
+    derived from their face. Retention cannot depend on the engine's opinion of
+    the capture.
+    """
+    from app.models import BiometricEnrollmentSample
+
+    user = make_user(client)
+    consent(client, user["headers"])
+    state = start(client, user["headers"])
+
+    dark = to_base64(render_face(seed=11, dark=True))
+    s = sample(client, user["headers"], state["enrollment_id"], dark)
+    assert not s.json()["verdict"]["accepted"], s.text
+    for _ in range(3):
+        sample(client, user["headers"], state["enrollment_id"], good())
+
+    r = client.post(
+        f"/api/biometric/enrollment/{state['enrollment_id']}/complete",
+        headers=user["headers"],
+    )
+    assert r.status_code == 200, r.text
+    assert (
+        db.query(BiometricEnrollmentSample)
+        .filter_by(enrollment_id=state["enrollment_id"])
+        .count()
+        == 0
+    )
+
+
+def test_a_refused_set_keeps_its_samples_so_the_person_can_try_again(client, db):
+    """Purging is tied to a committed template, not to a rejected attempt.
+
+    The consistency guard is the one failure where the samples are the only
+    diagnostic: the person cannot see their own pairwise scores, so deleting
+    them would make an unexplained 422 impossible to investigate.
+    """
+    from app.models import BiometricEnrollmentSample
+
+    user = make_user(client)
+    consent(client, user["headers"])
+    state = start(client, user["headers"])
+
+    other = to_base64(render_face(seed=7, identity="a-completely-different-person"))
+    for image in (b64(), b64(), other, other):
+        sample(client, user["headers"], state["enrollment_id"], image)
+
+    r = client.post(
+        f"/api/biometric/enrollment/{state['enrollment_id']}/complete",
+        headers=user["headers"],
+    )
+    assert r.status_code == 422
+    assert (
+        db.query(BiometricEnrollmentSample)
+        .filter_by(enrollment_id=state["enrollment_id"])
+        .count()
+        == 4
+    )
 
 
 # ------------------------------------------------------------------ complete

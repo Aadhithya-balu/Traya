@@ -203,6 +203,17 @@ override the env vars, so editing `.env` changes nothing on a seeded database.
 |---|---|---|
 | `EMERGENCY_SESSION_MINUTES` | `30` | Emergency session lifetime. Expiry is persisted on read. |
 | `SESSION_RETENTION_DAYS` | `90` | Declared retention for sessions. **Not yet applied to `audit_logs`, which have no retention job at all** - see [services](services.md#audit-service). |
+| `ENROLLMENT_MIN_SELF_SIMILARITY` | `0.62` | Enrollment's own gate: the lowest pairwise similarity permitted among the accepted samples of one person, or `complete` refuses the set with 422. Separate from `REVIEW_THRESHOLD` on purpose - it runs **inside** the enrollment, before any template exists, and its unit is "does this person look like themselves between captures", not "does a captured face match an enrolled person". |
+
+**`ENROLLMENT_MIN_SELF_SIMILARITY` is uncalibrated, and it was copied from
+`REVIEW_THRESHOLD`.** Per-image quality gates cannot detect a wrong person - four
+individually good photos of two different faces pass every gate in the engine -
+so this bound is the only thing standing between a careless capture set and a
+template that represents nobody. 0.62 is a placeholder inherited from the match
+threshold, not a measured false-rejection floor for same-person variation. Phase
+10 measures the real distribution and replaces it. Unlike the five match
+thresholds it is **not** seeded into `system_settings`, so the env var is the
+only place it lives and it changes matching behaviour on restart only.
 
 ## Derived properties
 

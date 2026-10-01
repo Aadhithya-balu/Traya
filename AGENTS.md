@@ -129,8 +129,8 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 
 | Fact | Value |
 |---|---|
-| Backend tests | **251 passed** on Postgres, **227 passed + 24 skipped** on SQLite after Phase 5 |
-| Backend tests on real Postgres | **251 passed**, no skips, ~353s. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
+| Backend tests | **258 passed** on Postgres, **234 passed + 24 skipped** on SQLite after Phase 6 |
+| Backend tests on real Postgres | **258 passed**, no skips, ~115s. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
 | Hosted Supabase | **Live and verified.** PostgreSQL 17.11, 22 tables, RLS on 22/22 with 19 policies, 7 roles / 18 permissions, emergency flow HIGH_CONFIDENCE 0.995 |
 | Frontend typecheck | **passes**, exit 0, strict TS |
 | `npm run docs:check` | **passes**, 31 pages |
@@ -360,20 +360,21 @@ C:\Traya\
         medical, notification, location, hospital, audit_service
       main.py                app factory, lifespan, health, SPA serving
     migrations\              Alembic (4 versions)
-    tests\                   pytest, 235 tests
+    tests\                   pytest, 258 tests on Postgres / 234 + 24 skipped on SQLite
     scripts\                 inspect_hosted_rls.py, apply_and_verify_hosted_rls.py,
                              verify_hosted_app.py — all read database state, none
                              deploy schema
   frontend\
     src\
       pages\                 10 pages, all routed
-      components\            Layout, Guards, Sheet, Tabs, StatusBadge, QualityPanel, icons
+      components\            Layout, Guards, Sheet, Tabs, StatusBadge, QualityPanel,
+                             EnrollWizard, icons
       context\               AuthContext, EmergencyContext
       hooks\                 useCamera, useGeolocation
       api\                   client.ts (the only network boundary), types.ts
-      i18n\                  strings.ts — 186 keys, en + ta, type-safe
+      i18n\                  strings.ts — 196 keys, en + ta, type-safe
       theme\                 ThemeProvider
-  docs\                      29 pages — see §6
+  docs\                      31 pages — see §6
   scripts\                   dev-all.mjs, check-docs.mjs
 ```
 
@@ -462,12 +463,23 @@ vector spaces cannot be compared; a dimension mismatch raises instead of
 returning a low score; and `opencv` is a warned alias rather than a lie. Details
 in [ADR 0008](docs/decisions/0008-real-biometric-engine.md).
 
+**Fixed in Phase 6** — do not re-report: enrollment is guided end to end, so the
+2-4 file upload is gone from `Profile.tsx`; the template is the **normalised
+centroid** of the accepted samples rather than N templates; `complete` refuses a
+capture set whose own samples disagree, because per-image quality gates cannot
+detect a wrong person; and a committed template **purges the pending sample
+vectors in the same transaction** (a *refused* set keeps them — that is the only
+diagnostic an unexplained 422 has). Details in
+[docs/MIGRATION_PLAN.md](docs/MIGRATION_PLAN.md#outcome---phase-6-complete).
+
 1. **The thresholds are the simulation's, and nothing is calibrated.** The real
    engine exists and is measured on three photographs of two people
    (0.8977 same, 0.2792 worst cross), which is a smoke test and **not** an
    accuracy claim. FAR, FRR, EER, the per-condition breakdown and latency are
    unmeasured; the seeded `system_settings` values are unchanged from Phase 0.
-   See §1 and [docs/MODEL_EVALUATION.md](docs/MODEL_EVALUATION.md).
+   **`ENROLLMENT_MIN_SELF_SIMILARITY` (0.62) is a placeholder too**, copied from
+   `REVIEW_THRESHOLD` rather than measured. See §1 and
+   [docs/MODEL_EVALUATION.md](docs/MODEL_EVALUATION.md).
 2. **No client path uses the RLS policies, and there is no pgvector.** RLS is on
    for all 22 tables with 19 policies written for the `traya_api` role, and the
    hosted `public` schema is verified as filtering. But `traya_api` is `NOLOGIN`
@@ -486,8 +498,10 @@ in [ADR 0008](docs/decisions/0008-real-biometric-engine.md).
    **bucket retention policies** are dashboard work with no portable SQL.
 4. **Five pages still hardcode English**: `EmergencyHub`, `Profile`, `Admin`,
    `Demo`, `Privacy`. Their colours are migrated; their strings are not.
-5. **94 of 186 i18n keys are unreferenced.** The whole 25-key `enroll.*`
-   namespace is dead — `Profile` does a file upload instead of guided capture.
+5. **63 of 196 i18n keys are unreferenced.** The `enroll.*` namespace is no
+   longer among them — Phase 6 wired all of it — but `common`, `result`,
+   `medical`, `location`, `profile`, `admin` and `emergency` still carry keys no
+   page renders, and `Privacy` does not use its own namespace at all.
 6. **`backend/.env.example` documents 20 of 36 settings.**
 7. **No frontend test runner.** Frontend changes are verified by typecheck and
    build. `backend/tests/test_frontend_contract.py` exists to catch client/server

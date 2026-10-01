@@ -254,10 +254,75 @@ export type BiometricEnrollmentStatus =
   | "enrolled";
 
 export interface BiometricStatus {
-status: BiometricEnrollmentStatus;
+  status: BiometricEnrollmentStatus;
   enrolled_at?: string | null;
   num_samples: number;
   algo_version?: string | null;
+}
+
+/** One coached pose. `done` is the server's view, not the client's. */
+export interface EnrollmentStep {
+  index: number;
+  key: string;
+  pose: string;
+  done: boolean;
+}
+
+export interface EnrollmentState {
+  enrollment_id: string;
+  status: string;
+  current_step: number;
+  total_steps: number;
+  accepted_samples: number;
+  rejected_samples: number;
+  min_samples: number;
+  steps: EnrollmentStep[];
+  current_instruction: string;
+  can_complete: boolean;
+}
+
+/**
+ * The engine's verdict on one capture.
+ *
+ * `guidance` holds i18n keys under `enroll.guidance.`, not sentences. The reason
+ * codes come from the engine so the quality panel and this wizard can never
+ * disagree about whether a photo was usable; the mapping to language happens on
+ * the client and lives in the same namespace.
+ */
+export interface SampleVerdict {
+  accepted: boolean;
+  guidance: string[];
+  quality_score: number;
+  face_count: number;
+  step_index: number;
+  step_key: string;
+  matched_step: boolean;
+  observed_direction: string;
+  pose_offset_x: number | null;
+  pose_offset_y: number | null;
+  pose_confident: boolean;
+}
+
+/**
+ * How much this person's own samples agreed with each other, measured at
+ * `complete`. Reported rather than hidden because a template enrolled from
+ * inconsistent captures matches badly, and `min_pairwise` is the first thing to
+ * look at when it does.
+ */
+export interface ConsistencyReport {
+  min_pairwise: number;
+  mean_pairwise: number;
+  pairs: number;
+  threshold: number;
+}
+
+export interface EnrollmentComplete {
+  status: string;
+  num_samples: number;
+  algo_version?: string | null;
+  enrolled_at?: string | null;
+  steps_completed: string[];
+  consistency: ConsistencyReport;
 }
 
 export interface DemoScenario {

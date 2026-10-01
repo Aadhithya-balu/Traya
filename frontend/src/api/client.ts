@@ -3,6 +3,9 @@ import type {
   Analytics,
   AuditLog,
   BiometricStatus,
+  EnrollmentComplete,
+  EnrollmentState,
+  SampleVerdict,
   CaptureOut,
   Consent,
   ContactAction,
@@ -313,12 +316,30 @@ export const api = {
       body: JSON.stringify({ consent_type: consentType, granted: false }),
     }),
   biometricStatus: () => request<BiometricStatus>("/biometric/status"),
-  enrollBiometric: (images: string[]) =>
-    request<{ status: string; num_samples: number; algo_version?: string; image_reports: unknown[] }>("/biometric/enroll", {
+  // Guided enrollment. Four calls, because the wizard holds server-side state:
+  // the person's current step, how many samples are accepted, and their own
+  // pose baseline all live on the enrollment row, so the client is never the
+  // authority on where the person is up to.
+  startEnrollment: () =>
+    request<EnrollmentState>("/biometric/enrollment/start", { method: "POST" }),
+  submitEnrollmentSample: (enrollmentId: string, image: string) =>
+    request<{ verdict: SampleVerdict; state: EnrollmentState }>(
+      `/biometric/enrollment/${enrollmentId}/sample`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ images: [image] }),
+      },
+    ),
+  completeEnrollment: (enrollmentId: string) =>
+    request<EnrollmentComplete>(`/biometric/enrollment/${enrollmentId}/complete`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ images }),
     }),
+  cancelEnrollment: (enrollmentId: string) =>
+    request<{ status: string; enrollment_id: string }>(
+      `/biometric/enrollment/${enrollmentId}`,
+      { method: "DELETE" },
+    ),
   deleteBiometric: () => request<void>("/users/biometric", { method: "DELETE" }),
   accessHistory: () => request<TimelineEvent[]>("/users/access-history"),
   notifications: () => request<Record<string, unknown>[]>("/users/notifications"),

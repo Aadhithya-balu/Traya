@@ -29,7 +29,7 @@ substantial.
 | Page | Colour | Strings | Phase 1 also fixed |
 |---|---|---|---|
 | `EmergencyHub` | done | **hardcoded** | result plumbing, GPS source, engine disclosure |
-| `Profile` | done | **hardcoded** | consent + enrolment vocabulary |
+| `Profile` | done | **hardcoded** | consent + enrolment vocabulary; guided enrolment wired in Phase 6 |
 | `Admin` | done | **hardcoded** | role names |
 | `Demo` | done | **hardcoded** | — |
 | `Privacy` | done | **hardcoded** | invisible headings |
@@ -192,24 +192,35 @@ endpoints**. Harmless, but it should depend on nothing instead.
 
 Six sections: basic info, medical profile, emergency contacts (add/remove),
 visible features (add/remove), biometric consent grant/withdraw, and biometric
-enrolment (upload 2-4 samples, enroll, delete).
+enrolment (guided capture, delete).
 
-Thirteen calls: `getMedical`, `listContacts`, `listFeatures`, `listConsents`,
+Twelve calls: `getMedical`, `listContacts`, `listFeatures`, `listConsents`,
 `biometricStatus` on load; then `updateProfile`, `updateMedical`, `addContact`,
 `deleteContact`, `addFeature`, `deleteFeature`, `grantConsent`/`withdrawConsent`,
-`enrollBiometric`, `deleteBiometric`.
+`deleteBiometric`.
 
-Issues to address when migrating:
+**Fixed in Phase 6: enrolment is guided, and the upload path is gone.** The
+2-4 file input, its 4-image cap and the `enrollBiometric` client method were
+deleted. Enrolment is now a *Start face enrollment* button that mounts
+[`EnrollWizard`](components.md#enrollwizard), which
+drives the four guided calls and shows the engine's own reason codes. This also
+retires three defects at once: the "2-4" label promised a minimum the page never
+enforced, the 4-image cap silently discarded images on a 3 MB failure, and the
+person had no idea which pose was being asked for. The section still shows the
+consent requirement, and renders the start button only when consent is `active`.
 
-- It uses the **legacy** `POST /biometric/enroll` bulk endpoint, not the guided
-  enrollment endpoints. The guided flow in
-  [services.md](../backend/services.md#guided-biometric-enrollment) exists on the
-  backend and is unwired on the frontend.
-- Enrolment images are capped at 4 but the label says "2-4" and **no minimum is
-  enforced**; submit only disables at zero, so enrollment fires with one image
-  and the server rejects it.
-- The per-file 3 MB cap returns on the first oversized file, silently discarding
-  images already collected.
+Two sharp edges remain, both consequences of not rewriting the page:
+
+- **Deleting templates now asks for confirmation** via `window.confirm` with
+  `enroll.delete.confirm`. It is the only revoke path and it is irreversible, but
+  `window.confirm` is a browser dialog in a design system that otherwise has a
+  `Sheet` for exactly this. Worth promoting when the page is migrated.
+- **A completed enrolment keeps the wizard mounted only until the parent updates
+  `bio`.** `EnrollWizard` shows its own completion card from the response; the
+  parent then flips to the enrolled block. Two success surfaces, briefly.
+
+Remaining issues to address when migrating:
+
 - `medical` state is **write-only**: it is set on load and after save and never
   read, so a stale read is impossible but the state is dead weight.
 - Allergies, conditions and medications are entered as comma-separated strings,

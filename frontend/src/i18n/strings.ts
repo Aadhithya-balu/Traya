@@ -47,6 +47,7 @@ export const en = {
   "common.no": "No",
   "common.saving": "Saving",
   "common.search": "Search",
+  "common.error": "Something went wrong. Please try again.",
 
   "landing.badge": "Emergency response",
   "landing.title": "Help identify an unresponsive person",
@@ -163,6 +164,7 @@ export const en = {
   "timeline.empty": "Nothing recorded yet.",
 
   "enroll.title": "Face enrollment",
+  "enroll.start": "Start face enrollment",
   "enroll.intro":
     "Five quick photos make a far stronger record than one. We will guide you through each angle.",
   "enroll.consent.required":
@@ -190,6 +192,16 @@ export const en = {
   "enroll.guidance.face_too_far": "Move closer so the face fills the frame.",
   "enroll.guidance.face_covered": "Something is covering the face.",
   "enroll.guidance.look_at_camera": "Hold the phone steady and face the camera.",
+  "enroll.guidance.inconsistent": "These photos do not look like the same person. Please start again and take all of them in one go.",
+  "enroll.guidance.camera_unavailable":
+    "The camera is not available. Allow camera access in your browser, or upload a photo instead.",
+  "enroll.camera.start": "Open camera",
+  "enroll.camera.stop": "Close camera",
+  "enroll.photos.one": "1 photo",
+  "enroll.photos.many": "{count} photos",
+  "enroll.spread": "Your photos agreed at {value}.",
+  "enroll.delete.confirm":
+    "Delete all stored face templates? You will need to enroll again.",
 
   "profile.title": "My profile",
   "profile.basics": "About me",
@@ -273,6 +285,7 @@ export const ta: Record<StringKey, string> = {
   "common.no": "இல்லை",
   "common.saving": "சேமிக்கிறது",
   "common.search": "தேடு",
+  "common.error": "ஏதோ தவறு நடந்தது. மீண்டும் முயற்சிக்கவும்.",
 
   "landing.badge": "அவசர நிலை மேலாண்டர்",
   "landing.title": "செயலில்லா நபரை அடையாளம் கண்டறிய உதவுங்கள்",
@@ -391,6 +404,7 @@ export const ta: Record<StringKey, string> = {
   "timeline.empty": "இதுவரை எதுவும் பதிவாகவில்லை.",
 
   "enroll.title": "முகப் பதிவு",
+  "enroll.start": "முகப் பதிவைத் தொடங்கு",
   "enroll.intro":
     "ஐந்து விரைவான படங்கள் ஒரு படத்தைவிட மிகவும் வலுவான பதிவைத் தரும். ஒவ்வொரு கோணத்திலும் நாங்கள் திசைகாட்டுவோம்.",
   "enroll.consent.required":
@@ -419,6 +433,17 @@ export const ta: Record<StringKey, string> = {
   "enroll.guidance.face_too_far": "முகம் சட்டகத்தை நிரப்பும்படி அருகில் செல்லவும்.",
   "enroll.guidance.face_covered": "ஏதோ முகத்தை மறைத்திருக்கிறது.",
   "enroll.guidance.look_at_camera": "தொலைபேசியை அசையாமல் பிடித்து கேமராவைப் பாருங்கள்.",
+  "enroll.guidance.inconsistent":
+    "இந்தப் படங்கள் ஒரே நபரின் இருப்பதாகத் தெரியவில்லை. மீண்டும் தொடங்கி, அனைத்தையும் ஒரே சமயத்தில் எடுங்கள்.",
+  "enroll.guidance.camera_unavailable":
+    "கேமரா கிடைக்கவில்லை. உங்கள் உலரியில் கேமரா அனுமதியை வழங்குங்கள், அல்லது ஒரு படத்தைப் பதிவேற்றுங்கள்.",
+  "enroll.camera.start": "கேமராவைத் திற",
+  "enroll.camera.stop": "கேமராவை மூடு",
+  "enroll.photos.one": "1 படம்",
+  "enroll.photos.many": "{count} படங்கள்",
+  "enroll.spread": "உங்கள் படங்கள் {value} என ஒன்றிபட்டன.",
+  "enroll.delete.confirm":
+    "சேமித்துள்ள எல்லா முக வார்ப்புருக்களையும் நீக்கவா? மீண்டும் பதிவு செய்ய வேண்டும்.",
 
   "profile.title": "எனது சுயவிவரம்",
   "profile.basics": "எனைப் பற்றி",

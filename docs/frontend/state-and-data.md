@@ -11,7 +11,7 @@ How the frontend holds state, talks to the API, and describes what comes back.
 | [`hooks/useCamera.ts`](#usecamera) | `useCamera`, `blobToBase64`, `fileToBase64` |
 | [`hooks/useGeolocation.ts`](#usegeolocation) | `useGeolocation` |
 | [`api/client.ts`](#api-client) | `api`, `ApiError`, `getTokens`, `setTokens`, `clearTokens` |
-| [`api/types.ts`](#api-types) | 24 interfaces |
+| [`api/types.ts`](#api-types) | 31 interfaces |
 
 ---
 
@@ -276,9 +276,24 @@ Paths are relative to `/api`.
 `/users/features`, `deleteFeature` DELETE `/users/features/{id}`, `listConsents`
 GET `/users/consents`, `grantConsent` POST `/users/consents`, `withdrawConsent`
 POST `/users/consents`, `biometricStatus` GET `/biometric/status`,
-`enrollBiometric` POST `/biometric/enroll`, `deleteBiometric` DELETE
+`startEnrollment` POST `/biometric/enrollment/start`,
+`submitEnrollmentSample` POST `/biometric/enrollment/{id}/sample`,
+`completeEnrollment` POST `/biometric/enrollment/{id}/complete`,
+`cancelEnrollment` DELETE `/biometric/enrollment/{id}`, `deleteBiometric` DELETE
 `/users/biometric`, `accessHistory` GET `/users/access-history`,
 `notifications` GET `/users/notifications`.
+
+**Enrollment is four calls, not one, and the client holds no progress.** The old
+`enrollBiometric` posted 2-4 images in a single request and is gone from the
+client; the backend still serves `POST /biometric/enroll` for the demo seed and
+its tests. `startEnrollment`, `submitEnrollmentSample`, `completeEnrollment` and
+`cancelEnrollment` replace it because the wizard's state is **server** state: the
+person's current step, how many samples are accepted and their own pose baseline
+all live on the enrollment row. The client renders `EnrollmentState` and never
+computes it, so a reload, a second device or a lost network cannot desynchronise
+the person from their own progress. `submitEnrollmentSample` takes a single
+image - the person is coached one capture at a time - and returns the engine's
+`verdict` alongside the new state.
 
 **Demo** - `demoScenarios` GET `/demo/scenarios`, `demoRun` POST `/demo/run`,
 `demoEnroll` POST `/demo/enroll`.
@@ -304,7 +319,7 @@ every other PATCH. That is a backend inconsistency, not a client choice.
 
 ## api/types
 
-`api/types.ts`. 24 interfaces mirroring the Pydantic schemas.
+`api/types.ts`. 31 interfaces mirroring the Pydantic schemas.
 
 | Interface | Purpose |
 |---|---|
@@ -330,6 +345,11 @@ every other PATCH. That is a backend inconsistency, not a client choice.
 | `VisibleFeature` | A scar, tattoo, birthmark or mark. |
 | `Consent` | Type, status, version, timestamps. **No `id`** - key on type plus version. |
 | `BiometricStatus` | Status, enrolment time, sample count, algorithm version. |
+| `EnrollmentStep` | One coached pose: `index`, `key`, `pose`, `done`. `done` is the server's view. |
+| `EnrollmentState` | Progress: `enrollment_id`, `status`, `current_step`, `total_steps`, `accepted_samples`, `rejected_samples`, `min_samples`, `steps`, `current_instruction`, `can_complete`. |
+| `SampleVerdict` | One capture's verdict: `accepted`, `guidance`, `quality_score`, `face_count`, `step_index`, `step_key`, `matched_step`, `observed_direction`, `pose_offset_x`/`_y`, `pose_confident`. |
+| `ConsistencyReport` | `min_pairwise`, `mean_pairwise`, `pairs`, `threshold` from `complete`. |
+| `EnrollmentComplete` | What `complete` returns: status, `num_samples`, `algo_version`, `enrolled_at`, `steps_completed`, `consistency`. |
 | `DemoScenario` | One demo scenario. |
 | `DemoRun` | Session plus its `identification`. |
 | `Analytics` | System-wide counters and the 13-day breakdown. |

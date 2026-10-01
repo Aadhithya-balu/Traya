@@ -13,6 +13,7 @@ is installed; these are the only primitives available.
 | [`Tabs.tsx`](#tabs) | `Tabs`, `ListRow` |
 | [`StatusBadge.tsx`](#statusbadge) | `StatusBadge`, `ScoreBar`, `SimulationNotice` |
 | [`QualityPanel.tsx`](#qualitypanel) | `QualityPanel` |
+| [`EnrollWizard.tsx`](#enrollwizard) | `EnrollWizard` |
 | [`icons.tsx`](#icons) | 17 icons |
 
 ---
@@ -241,6 +242,35 @@ handles both and `CaptureOut` no longer needs adapting.
 
 The badge tints render correctly now — the `<alpha-value>` fix in Phase 1
 resolved the same issue here as in `StatusBadge`.
+
+## EnrollWizard
+
+`components/EnrollWizard.tsx` -> `EnrollWizard`.
+
+| Prop | Type |
+|---|---|
+| `onEnrolled` | `(status: EnrollmentComplete) => void` |
+| `onCancel` | `() => void` |
+
+The guided face-enrollment flow, mounted by `Profile` only when the person taps
+*Start face enrollment* and holds `biometric_enrollment` consent at `active`.
+Replaced the old 2-4 file upload there. It is deliberately **not** a route: a
+half-finished enrollment is server state with a 20-minute TTL, and a page that
+can be reloaded should resume rather than restart.
+
+| Behaviour | Why |
+|---|---|
+| Mounts by calling `startEnrollment`, then renders `EnrollmentState` | The person is never shown a step the server has not agreed is current. Reload resumes. |
+| One capture per request, via `submitEnrollmentSample` | The coach asks for one pose at a time. Batch submission is how the old upload path lost that. |
+| Renders `verdict.guidance` as i18n keys, not sentences | Guidance codes come from the engine, so the wizard cannot disagree with `QualityPanel` about why a capture was refused. |
+| Capture button disabled until `camera.active`; a file input remains | No camera or a denied permission must not dead-end enrollment - an upload is the same endpoint with one image. |
+| *Start over* calls `cancelEnrollment` first | Discarding has to release the server-side row and its pending vectors, not merely unmount the component. |
+| A 409/410 on submit clears state and shows only *Start over* | Those mean the enrollment is gone or finished server-side. Resuming would fail on every subsequent capture. |
+
+Two things it deliberately does **not** do: it never advances the step itself
+(that is `verdict.matched_step`), and it never computes how many samples are
+still needed - `min_samples` and `can_complete` come from the server, so the two
+minimums in the system cannot drift apart.
 
 ## Icons
 

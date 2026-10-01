@@ -10,7 +10,8 @@ MedicalProfile,
 VisibleFeature,
 } from "../api/types";
 import { useAuth } from "../context/AuthContext";
-import { fileToBase64 } from "../hooks/useCamera";
+import { EnrollWizard } from "../components/EnrollWizard";
+import { useI18n } from "../i18n";
 import { fmtDateTime } from "../utils/format";
 
 const BLANK_MEDICAL: MedicalProfile = {
@@ -24,6 +25,7 @@ const BLANK_MEDICAL: MedicalProfile = {
 
 export function Profile() {
   const { user, refreshUser } = useAuth();
+  const { t } = useI18n();
 
   const [profile, setProfile] = useState({ full_name: "", phone: "", date_of_birth: "" });
   const [, setMedical] = useState<MedicalProfile>(BLANK_MEDICAL);
@@ -32,7 +34,7 @@ export function Profile() {
   const [features, setFeatures] = useState<VisibleFeature[]>([]);
   const [consents, setConsents] = useState<Consent[]>([]);
   const [bio, setBio] = useState<BiometricStatus | null>(null);
-  const [enrollImages, setEnrollImages] = useState<string[]>([]);
+  const [enrolling, setEnrolling] = useState(false);
 
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -202,41 +204,14 @@ export function Profile() {
     }
   };
 
-  const onEnrollFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    const images: string[] = [];
-    for (const f of files) {
-      if (f.size > 3 * 1024 * 1024) {
-        setError("Each image must be under 3 MB.");
-        return;
-      }
-      images.push(await fileToBase64(f));
-    }
-    setEnrollImages((prev) => [...prev, ...images].slice(0, 4));
-  };
-
-  const enroll = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await api.enrollBiometric(enrollImages);
-      setBio({ status: "enrolled", num_samples: res.num_samples, algo_version: res.algo_version });
-      setEnrollImages([]);
-      flash(`Enrolled with ${res.num_samples} samples.`);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Enrollment failed.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const deleteBiometric = async () => {
+    if (!window.confirm(t("enroll.delete.confirm"))) return;
     setBusy(true);
     setError(null);
     try {
       await api.deleteBiometric();
       setBio(null);
-      setEnrollImages([]);
+      setEnrolling(false);
       flash("Biometric templates deleted.");
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : "Delete failed.");
@@ -427,20 +402,32 @@ export function Profile() {
             </div>
           )}
 
-          <div>
-            <label className="label">Sample photos (2–4 front-facing, well-lit)</label>
-            <input type="file" accept="image/jpeg,image/png,image/webp" multiple className="input file:mr-3 file:border-0 file:bg-raised file:px-3 file:py-1.5 file:text-accent" onChange={onEnrollFiles} />
-            {enrollImages.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {enrollImages.map((img, i) => (
-                  <img key={i} src={`data:image/jpeg;base64,${img}`} className="h-16 w-16 rounded-lg border border-line object-cover" alt="sample" />
-                ))}
-              </div>
-            )}
-            <button onClick={enroll} className="btn-primary mt-3" disabled={busy || enrollImages.length === 0}>
-              Enroll face samples
+          {enrolling ? (
+            <EnrollWizard
+              onEnrolled={(res) => {
+                setBio({
+                  status: "enrolled",
+                  num_samples: res.num_samples,
+                  algo_version: res.algo_version ?? null,
+                  enrolled_at: res.enrolled_at ?? null,
+                });
+                setEnrolling(false);
+                flash(t("enroll.done.title"));
+              }}
+              onCancel={() => setEnrolling(false)}
+            />
+          ) : bioConsent?.status === "active" ? (
+            <button
+              type="button"
+              onClick={() => setEnrolling(true)}
+              className="btn-primary"
+              disabled={busy}
+            >
+              {t("enroll.start")}
             </button>
-          </div>
+          ) : (
+            <p className="text-sm text-muted">{t("enroll.consent.required")}</p>
+          )}
         </div>
       </div>
     </div>

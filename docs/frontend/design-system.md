@@ -360,6 +360,22 @@ Coverage is incomplete by design of the migration, not by accident: the legacy
 pages still hardcode English, and `Privacy` does not even use its `privacy.*`
 keys. The namespaces exist and are populated; the pages have not caught up.
 
+**`enroll` is the one namespace that is now fully wired**, which is the proof the
+flat-key scheme survives contact with a real flow. It was written in Phase 0 and
+sat entirely unreferenced until Phase 6; `EnrollWizard` plus `Profile` now use
+every one of them, in both languages. Two things about how it is consumed are
+worth copying:
+
+- **Guidance codes are keys, not sentences.** The engine returns
+  `no_face_detected`, and `EnrollWizard` builds `enroll.guidance.${code}`. A
+  backend that gains a reason code renders a raw code on screen until the string
+  is added, which is the correct failure - a missing translation is loud here,
+  while a paraphrased message would be silently inconsistent.
+- **A key that cannot be constructed from a constant needs a cast.**
+  `t(\`enroll.step.${step.key}\` as StringKey)` is the one `as` in the frontend,
+  and it is unavoidable: `StringKey` is derived from `en`, so a template literal
+  cannot prove membership. Everything else uses a literal key.
+
 ## The palette migration is done; the hardcoded English is not
 
 `ink-*` and `slate-*` were removed from the theme, and six files were still using

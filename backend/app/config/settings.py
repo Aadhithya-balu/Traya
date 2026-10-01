@@ -103,6 +103,19 @@ class Settings(BaseSettings):
     CONTEXT_BOOST: float = 0.05
     SECONDARY_FEATURE_BOOST: float = 0.06
 
+    # Guided enrollment consistency. Every accepted sample of one person's
+    # enrollment must resemble the others; below this the captures are treated as
+    # not being of the same face and no template is built. This is the
+    # intra-person analogue of the impostor check, and it is the step that stops
+    # an enrollment assembled from several different people - or from wildly
+    # different conditions - from being committed as one identity.
+    #
+    # 0.62 is the review threshold, deliberately: a sample that could not be
+    # matched to a stranger's template for automatic acceptance should not be
+    # accepted as part of this person's own template either. UNCALIBRATED, like
+    # every other threshold here - Phase 10 measures it.
+    ENROLLMENT_MIN_SELF_SIMILARITY: float = 0.62
+
     # Sessions
     EMERGENCY_SESSION_MINUTES: int = 30
     SESSION_RETENTION_DAYS: int = 90

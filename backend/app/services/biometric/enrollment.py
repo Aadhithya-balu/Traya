@@ -12,6 +12,10 @@ Design rules this module follows:
 * A low-confidence pose estimate is treated as "unknown", never as a reason
   to reject a good capture.
 * Pending samples stay encrypted at rest, exactly like stored templates.
+* Pending samples are purged in the same transaction that stores the template.
+  After `complete` the enrollment row keeps quality and pose reports for audit
+  but holds no vector, so the person's raw per-pose embeddings do not outlive
+  the centroid derived from them.
 * Nothing is written to the live profile until ``complete`` is called, so an
   abandoned enrollment cannot leave a half-built identity behind.
 """
@@ -21,13 +25,14 @@ import logging
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 
+import numpy as np
 from fastapi import HTTPException, status as http_status
 from sqlalchemy.orm import Session
 
 from app.config.settings import settings
 from app.models import BiometricEnrollment, BiometricEnrollmentSample, BiometricProfile, User
 from app.repositories.profile import ProfileRepository
-from app.security.crypto import encrypt_bytes
+from app.security.crypto import decrypt_bytes, encrypt_bytes
 from app.services.audit_service import log_user_action
 from app.services.identification.engine import PoseEstimate, direction_against, get_engine
 from app.services.identification.registry import serialize_embedding
@@ -248,6 +253,49 @@ def _baseline_for(enrollment: BiometricEnrollment, pose: PoseEstimate) -> PoseEs
     )
 
 
+def normalized(vector: np.ndarray) -> np.ndarray:
+    """Unit-length vector, or zeros if it has no direction to speak of.
+
+    A zero vector has no meaningful normalisation, and dividing by its norm would
+    produce NaNs that propagate silently into every score computed later. This
+    should not happen for a real descriptor, but the failure mode of an exception
+    deep in the matcher is worse than a vector that scores nothing.
+    """
+    norm = float(np.linalg.norm(vector))
+    if norm == 0.0:
+        return np.zeros_like(vector)
+    return vector / norm
+
+
+def consistency_report(vectors: list[np.ndarray], engine) -> dict:
+    """How much this person's own samples agree with each other.
+
+    Every number here is measured on the samples this enrollment actually
+    collected, and every one is reported rather than only the pass/fail, because
+    a person whose intra-person similarity is 0.7 when the gate wants 0.62 has
+    enrolled a template that will match badly, and the operator should be able to
+    see that rather than discover it during an emergency.
+    """
+    if len(vectors) < 2:
+        return {
+            "min_pairwise": 1.0,
+            "mean_pairwise": 1.0,
+            "pairs": 0,
+            "threshold": settings.ENROLLMENT_MIN_SELF_SIMILARITY,
+        }
+    pairs = [
+        engine.similarity(vectors[i], vectors[j])
+        for i in range(len(vectors))
+        for j in range(i + 1, len(vectors))
+    ]
+    return {
+        "min_pairwise": round(min(pairs), 4),
+        "mean_pairwise": round(sum(pairs) / len(pairs), 4),
+        "pairs": len(pairs),
+        "threshold": settings.ENROLLMENT_MIN_SELF_SIMILARITY,
+    }
+
+
 def complete_enrollment(
     db: Session, user: User, enrollment_id: str
 ) -> dict:
@@ -277,6 +325,32 @@ def complete_enrollment(
             ),
         )
 
+    engine = get_engine()
+    vectors = [
+        np.frombuffer(decrypt_bytes(s.embedding_blob), dtype=np.float64) for s in samples
+    ]
+
+    consistency = consistency_report(vectors, engine)
+
+    # Refuse to build a template from samples that do not agree with each other.
+    # Each sample passed the *per-image* quality gates, which say nothing about
+    # whether the images are of the same person: four individually good photos of
+    # two different faces satisfy every gate in the engine. Only a comparison
+    # between the person's own samples catches that, and committing it would
+    # create a template that matches neither identity well and, at the review
+    # threshold, could match a stranger.
+    if consistency["min_pairwise"] < settings.ENROLLMENT_MIN_SELF_SIMILARITY:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "The captured photos do not look like the same person "
+                f"(closest pair {consistency['min_pairwise']:.2f}, "
+                f"needs {settings.ENROLLMENT_MIN_SELF_SIMILARITY:.2f}). "
+                "Please start again and capture all steps in one session, "
+                "in the same place."
+            ),
+        )
+
     repo = ProfileRepository(db)
     profile = repo.biometric(user.id)
     if profile is None:
@@ -290,15 +364,39 @@ def complete_enrollment(
     # settings: the two differ on the real engine, and tagging a 128D SFace
     # descriptor with the simulation's string would make it invisible to
     # load_enrolled, so every enrollment would silently fail to match.
-    algo_version = get_engine().algo_version
+    algo_version = engine.algo_version
+
+    # The template is the centroid of this person's samples, L2-normalised
+    # because the matcher compares with cosine and an un-normalised mean is not a
+    # unit vector. One template instead of N also means N-to-1 comparisons at
+    # match time rather than N-to-N, and a single score instead of a max over
+    # samples - which is what makes the consistency number above meaningful as a
+    # description of the stored template rather than of a discarded input.
+    centroid = normalized(np.mean(vectors, axis=0))
 
     # Re-enrollment replaces the previous templates outright, so a withdrawn
     # consent can never leave an older embedding behind.
-    repo.replace_embeddings(profile, [s.embedding_blob for s in samples], algo_version)
+    repo.replace_embeddings(
+        profile, [encrypt_bytes(serialize_embedding(centroid))], algo_version
+    )
     profile.num_samples = len(samples)
+    steps_completed = sorted({s.step_key for s in samples})
 
     enrollment.status = "completed"
     enrollment.completed_at = datetime.now(UTC)
+
+    # Retention. The raw per-sample embeddings existed only to build the
+    # centroid; keeping them would leave N extra biometric vectors at rest for
+    # the life of the row, from which the original photos' embeddings could be
+    # recovered. So they go in the same transaction that commits the template:
+    # either both survive or neither does. The enrollment row itself is kept -
+    # it is the audit record of what was captured and when - but it retains
+    # only per-sample quality and pose reports, never a vector.
+    deleted = (
+        db.query(BiometricEnrollmentSample)
+        .filter(BiometricEnrollmentSample.enrollment_id == enrollment.id)
+        .delete(synchronize_session=False)
+    )
     db.commit()
 
     log_user_action(
@@ -308,9 +406,13 @@ def complete_enrollment(
         resource_id=profile.id,
         details={
             "samples": len(samples),
+            "sample_vectors_purged": deleted,
             "algo": algo_version,
             "guided": True,
-            "steps": STEP_KEYS,
+            "steps": steps_completed,
+            # Recorded because it is the number that will explain a bad match
+            # later, and it is not recoverable from the stored template.
+            "intra_person_similarity": consistency["min_pairwise"],
         },
         commit=False,
     )
@@ -321,7 +423,8 @@ def complete_enrollment(
         "num_samples": len(samples),
         "algo_version": algo_version,
         "enrolled_at": profile.enrolled_at,
-        "steps_completed": sorted({s.step_key for s in samples}),
+        "steps_completed": steps_completed,
+        "consistency": consistency,
     }
 
 

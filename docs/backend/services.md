@@ -58,7 +58,9 @@ Constants: `ENROLLMENT_TTL_MINUTES = 20`, `MIN_ACCEPTED_SAMPLES = 3`,
 | `guidance_for` | Maps engine `reason_codes` to UI guidance codes. The engine stays the single source of truth for usability. |
 | `start_enrollment` | Requires `active_consent(user.id, "biometric")` or raises 409. Resumes a live in-progress enrollment; marks stale ones `abandoned`. |
 | `add_sample` | Returns `(enrollment, verdict)`. 404 not owner, 409 not in progress, 410 past TTL. |
-| `complete_enrollment` | 422 with fewer than 3 accepted samples. Calls `ProfileRepository.replace_embeddings` - re-enrollment **replaces**, never appends - and audits `biometric.enrolled`. |
+| `normalized` | L2-normalises a vector. Applied to the centroid because the matcher compares with cosine, and an un-normalised mean is not a unit vector. Raises on a zero vector, which no quality-accepted sample produces. |
+| `consistency_report` | Every unordered pair of the person's own samples through the live engine's `similarity`, returning `min_pairwise`, `mean_pairwise`, `pairs` and the `threshold` the minimum was tested against. Fewer than two samples yields `min_pairwise = 0.0`, which reads as maximally inconsistent rather than unknown. |
+| `complete_enrollment` | 422 with fewer than 3 accepted samples. Refuses a set whose `min_pairwise` is below `ENROLLMENT_MIN_SELF_SIMILARITY`. Stores the normalised centroid through `ProfileRepository.replace_embeddings` - re-enrollment **replaces**, never appends - **deletes the pending sample rows in the same transaction**, and audits `biometric.enrolled` with `sample_vectors_purged` and `intra_person_similarity`. |
 | `abort_enrollment` | Marks the enrollment `abandoned`. Silently returns if not the owner. |
 | `enrollment_state` | Serializable progress: `steps[]`, `current_instruction`, `can_complete`. |
 
@@ -76,6 +78,27 @@ Private helpers: `_baseline_for`, `_record_report` (keeps the last 20 verdicts),
   to it. Horizontal directions need no baseline.
 - **Samples are stored encrypted while in progress**, so an abandoned
   enrollment never leaves plaintext templates behind.
+- **The template is the centroid, not the samples.** One unit vector per person
+  means N-to-1 comparison at match time and a single score, instead of a max over
+  N templates - and a max is a description of the luckiest capture, not of the
+  person. `num_samples` still reports how many samples were contributed, because
+  that is the useful provenance and not the number of rows that resulted.
+- **Per-image quality gates cannot detect a wrong person.** Four individually
+  good photos of two different faces satisfy every gate in the engine, so
+  `complete` compares the person's own samples against each other and refuses
+  the set. Without that check an enrollment assembled carelessly becomes a
+  template that represents nobody, and at the review threshold could match a
+  stranger.
+- **Purging is tied to a committed template, not to an attempt.** A successful
+  `complete` deletes every `biometric_enrollment_samples` row for the enrollment
+  in the same transaction that stores the centroid, accepted and rejected alike:
+  each of those was a biometric derived from someone's face and existed only to
+  build the mean. The enrollment row survives as the audit record, keeping its
+  per-sample quality and pose reports and no vectors. A **refused** set keeps its
+  samples, because that is the one failure where they are the only diagnostic -
+  the person cannot see their own pairwise scores, so an unexplained 422 would
+  otherwise be impossible to investigate. `sample_vectors_purged` is in the audit
+  details so the count is checkable after the fact.
 
 ---
 
@@ -223,8 +246,6 @@ decisions that must behave identically on both engines.
 | `pose_step_key` | The step a pose represents; `unknown` when unconfident. |
 | `compare` | Delegates to the provider's `similarity`. |
 | `get_template` | The template layer; a passthrough in simulation. |
-| `mean_center` | No-op passthrough. |
-| `compare_centered` | Delegates to `compare`. |
 | `get_engine` | The module-level `BiometricEngine` singleton. |
 | `get_provider` | Re-exported from `providers`, so callers need one import. |
 

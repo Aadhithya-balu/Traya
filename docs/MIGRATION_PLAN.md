@@ -686,6 +686,63 @@ Medium. The most common failure is a user who cannot satisfy the pose steps on
 an injury or a disability. The wizard must allow skipping a step, not block on
 it.
 
+### Outcome - Phase 6 complete
+
+**Delivered.** Enrollment no longer stores the samples; it stores **one
+normalised centroid** of them. `complete_enrollment` decrypts the accepted
+vectors, measures every unordered pair against each other through the live
+engine, refuses the set below `ENROLLMENT_MIN_SELF_SIMILARITY`, writes the mean,
+and **deletes the pending sample rows in that same transaction**. On the frontend
+the 2-4 file upload is deleted: `EnrollWizard` drives `startEnrollment`,
+`submitEnrollmentSample`, `completeEnrollment` and `cancelEnrollment`, one
+capture at a time, and every one of the 25 `enroll.*` keys is referenced.
+
+Verification run after this phase: **258 passed on Postgres, 234 passed + 24
+skipped on SQLite, `docs:check` passes across 31 pages, frontend typecheck and
+build pass, 16 real-engine tests pass under `BIOMETRIC_ENGINE=yunet`.**
+
+**The gate item that changed the design is retention.** Purging is tied to a
+*committed template*, not to an attempt, and that distinction is the whole
+decision. A successful `complete` deletes every sample row for the enrollment -
+accepted and rejected alike, because each was a biometric derived from someone's
+face - leaving the enrollment row as an audit record that keeps quality and pose
+reports and no vectors. A **refused** set keeps its samples: that is the one
+failure where they are the only diagnostic, since the person cannot see their own
+pairwise scores, so an unexplained 422 would otherwise be impossible to
+investigate. `sample_vectors_purged` is in the audit details so the count is
+checkable after the fact.
+
+**Consistency validation is the part that cannot be left implicit.** Per-image
+quality gates cannot detect a wrong person: four individually good photos of two
+different faces satisfy every gate in the engine, and an enrolment assembled
+carefully-but-haphazardly becomes a template that represents nobody and, at the
+review threshold, could match a stranger. The threshold itself is **not
+calibrated** - 0.62 is copied from `REVIEW_THRESHOLD` because it is a placeholder,
+not a measured false-rejection floor - and Phase 10 replaces it. It is also not
+seeded into `system_settings`, unlike the five match thresholds, so the env var
+is the only place it lives.
+
+**Three defects were retired by deleting the upload path**, not by fixing it. The
+"2-4" label promised a minimum the page never enforced, the 4-image cap silently
+discarded images already collected when a later file exceeded 3 MB, and the
+person was never told which pose was being asked for. The bulk
+`POST /biometric/enroll` endpoint still exists on the backend for the demo seed
+and its tests; only the client stopped calling it.
+
+**The accessibility risk above did not materialise**, because the backend already
+answered it: `MIN_ACCEPTED_SAMPLES` is 3 against 5 offered steps, and pose
+mismatch is reported rather than rejected, so two steps are always skippable.
+That is a property of the existing service, not of anything added here, and it
+holds for pose failure only - a person the **quality** gates refuse (blurred,
+dark, occluded) still cannot complete, which is a genuine unresolved case for an
+injury or a disability.
+
+**What is not claimed.** No browser has run this. The wizard is verified by
+typecheck, build and the server-side contract tests, **not** by a person holding
+a phone, and the real engine has still never been run against a live camera.
+`ENROLLMENT_MIN_SELF_SIMILARITY` has no measured distribution behind it. Phase 5's
+step 10 (the `MULTIPLE_CANDIDATES` margin rule) remains undone.
+
 ## Phase 7 - Emergency workflow, fallback and incidents
 
 **Depends on** 5 and 6.

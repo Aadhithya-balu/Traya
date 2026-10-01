@@ -87,10 +87,10 @@ npm run docs:check
 ```
 
 It exits non-zero and lists every uncovered identifier with the page that should
-own it. Currently 20 checks over 29 pages, covering 47 endpoints, 38 models, 4
-migrations, 73 repository identifiers, 70 service identifiers, 37 settings,
-25 permission and role identifiers, 20 pages and components, 17 icons, 43 API
-methods, 26 types, 11 routes, 34 design tokens and i18n namespaces.
+own it. Currently 17 checks over 31 pages, covering 47 endpoints, 38 models, 4
+migrations, 73 repository identifiers, 84 service identifiers, 44 settings,
+25 permission and role identifiers, 20 pages and components, 17 icons, 46 API
+methods, 31 types, 11 routes, 34 design tokens and i18n namespaces.
 
 `npm run verify` at the root is an alias for the same check.
 
@@ -163,3 +163,12 @@ them only on their own badge tint — and the camera-error bar used `text-text` 
 **Still open, and not fixed by either phase**: the five legacy pages hardcode
 English, and `SimulationNotice` is still dead code next to the `EngineDisclosure`
 that replaced its job inline.
+
+**Closed in Phase 6**: the 2-4 file upload is gone from `Profile.tsx`, enrollment
+stores the **normalised centroid** of the accepted samples rather than N
+templates, `complete` refuses a capture set whose own samples disagree below
+`ENROLLMENT_MIN_SELF_SIMILARITY`, and a committed template purges the pending
+sample vectors in the same transaction. See the
+[Phase 6 outcome](MIGRATION_PLAN.md#outcome---phase-6-complete). The new
+threshold is itself **uncalibrated** — it is copied from `REVIEW_THRESHOLD`, and
+Phase 10 replaces it — and no browser has run the wizard.
