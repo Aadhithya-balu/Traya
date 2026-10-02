@@ -62,10 +62,23 @@ class Settings(BaseSettings):
     PUBLIC_IDENTIFY_WINDOW_SECONDS: int = 60
     AUTH_LIMIT: int = 30
     AUTH_WINDOW_SECONDS: int = 60
+    # Identification is the enumeration vector, so a *signed-in* caller is
+    # limited separately and more tightly than an anonymous one. Per-IP alone is
+    # not enough: one attacker behind rotating addresses, or one compromised
+    # shared NAT gateway, defeats an IP key entirely, while the account stays
+    # exactly as stable as the IP the attacker is trying to move off.
+    IDENTIFY_USER_LIMIT: int = 20
+    IDENTIFY_USER_WINDOW_SECONDS: int = 60
 
     # Uploads
     MAX_UPLOAD_BYTES: int = 6 * 1024 * 1024
     ALLOWED_IMAGE_MIMES: list[str] = ["image/jpeg", "image/png", "image/webp"]
+    # Pixel-bomb guard. The byte cap above is defeated by a small file declaring
+    # enormous dimensions, so dimensions are checked before `Image.load()`.
+    # 24 MP is roughly a 6000x4000 sensor with headroom; every camera this app
+    # targets is under it, and the YuNet input is resized to 112x112 anyway.
+    MAX_IMAGE_PIXELS: int = 24_000_000
+    MAX_IMAGE_ASPECT_RATIO: float = 8.0
 
     # Biometric engine
     #   auto       real provider if the model files are present, else simulation

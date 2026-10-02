@@ -352,14 +352,58 @@ polyglot, an oversized payload.
 
 | Mitigation | State |
 | --- | --- |
-| Magic-byte check | **Real.** `engine.py:103` |
-| Size cap | **Real** |
-| Decode limits | **Real** |
+| Magic-byte check | **Real.** `app/utils/helpers.py` |
+| Byte size cap | **Real.** `MAX_UPLOAD_BYTES`, 6 MiB |
+| Pixel-count cap | **Real, added in Phase 11.** `MAX_IMAGE_PIXELS` (24 MP), checked *before* `Image.load()` |
+| Aspect-ratio cap | **Real, added in Phase 11.** `MAX_IMAGE_ASPECT_RATIO` (8.0) |
+| Decode must succeed | **Real.** A corrupt file is a 422, not a crashed decoder |
 | Rendering in a server process | **Residual.** A malformed image is a parser bug in OpenCV or Pillow |
+
+**The gap Phase 11 closed.** The byte cap and the magic-byte check were both
+cheap and both defeated by a small file: a PNG under 6 MiB can declare
+40000 x 40000, which expands to roughly 6.4 GB of RGBA. Every photo in this
+product is attacker-supplied, so that was a one-request denial of service. The
+dimension check runs before decoding, so the allocation never happens. PIL
+warns below its own hard threshold and raises above it, which means deferring
+to PIL accepts whatever PIL decided to merely warn about.
 
 The residual risk is real: decoding happens in the API process. Mitigation is
 patching the decoders and running untrusted decoding in a sandboxed worker -
 out of scope for the MVP, and recorded rather than hidden.
+
+### Rate limiting - and what it does not do
+
+Applied by `RateLimitMiddleware` (`app/security/rate_limit.py`) as an HTTP
+middleware, before the route and therefore before authorization.
+
+| Route family | Key | Limit |
+| --- | --- | --- |
+| `/api/emergency/*` | IP | `PUBLIC_IDENTIFY_LIMIT` (10 / 60s) |
+| `/api/emergency/*` + bearer token | account | `IDENTIFY_USER_LIMIT` (20 / 60s) |
+| `/api/auth/*` | IP | `AUTH_LIMIT` (30 / 60s) |
+
+The per-account key exists because identification is the enumeration vector in
+this product. An IP key alone is defeated by address rotation or by anyone
+behind a shared NAT gateway, while the account stays exactly as stable as the IP
+the attacker is trying to move off.
+
+**Three honest limitations.**
+
+1. **State is per-process.** The window lives in a Python dict in the app
+   process. With `N` uvicorn workers the effective limit is `limit * N`, and a
+   restart clears every window. This must move to a shared store (Redis) before
+   horizontal scaling. It is the one rate-limit control here that is not
+   production-grade.
+2. **The account key is decoded, not verified.** `sub` is read from the token
+   without checking the signature, because the route dependency verifies it
+   moments later. A forged `sub` buys a window keyed on a value the attacker
+   chose - which grants nothing the per-IP key did not already grant, and the
+   request is still rejected. The key's only job is to hold a *legitimate*
+   account to its own budget.
+3. **It is disabled under `TESTING`.** `RateLimiter.check` short-circuits on
+   `settings.TESTING` so the rest of the suite does not trip it. The limiter's
+   own tests flip `settings.TESTING` off for the duration of one test, which is
+   why `settings` is treated as import-time mutable state.
 
 ### T6 - Token theft via XSS
 

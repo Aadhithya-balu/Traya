@@ -104,13 +104,56 @@ def validate_and_decode_image(data: str, field: str = "image") -> bytes:
     from PIL import Image
 
     try:
-        Image.open(io.BytesIO(raw)).load()
+        probe = Image.open(io.BytesIO(raw))
+        _reject_pixel_bomb(probe)
+        probe.load()
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Image could not be decoded",
         )
     return raw
+
+
+def _reject_pixel_bomb(image) -> None:
+    """Refuse an image whose *dimensions* are implausible, before decoding it.
+
+    The size cap and the magic-byte check above are both cheap, and both are
+    trivially defeated by a small file: a PNG under 6 MB can declare 40000 x
+    40000 pixels, which expands to roughly 6.4 GB of RGBA. PIL emits a warning
+    below its hard threshold and raises above it, so relying on PIL alone means
+    accepting whatever it decided to warn about rather than deciding ourselves.
+
+    This is a Phase 11 item and it is a real gap rather than a hardening nicety:
+    every photo in this product is attacker-supplied, and a single request
+    should not be able to exhaust the process.
+    """
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Image has invalid dimensions",
+        )
+    pixels = width * height
+    if pixels > settings.MAX_IMAGE_PIXELS:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"Image is {width}x{height} pixels; the limit is "
+                f"{settings.MAX_IMAGE_PIXELS} pixels"
+            ),
+        )
+    # An extreme aspect ratio is a second decompression trick and costs nothing
+    # to reject: no real face photograph is a 50:1 strip.
+    longer = max(width, height)
+    shorter = min(width, height)
+    if shorter and longer / shorter > settings.MAX_IMAGE_ASPECT_RATIO:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Image aspect ratio is not plausible for a photograph",
+        )
 
 
 def is_public_emergency_path(path: str) -> bool:

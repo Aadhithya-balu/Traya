@@ -113,11 +113,32 @@ is what made the old default dangerous.
 | `RATE_LIMIT_ENABLED` | `True` | Master switch. |
 | `PUBLIC_IDENTIFY_LIMIT` | `10` | Requests per window on `/api/emergency/*`. |
 | `PUBLIC_IDENTIFY_WINDOW_SECONDS` | `60` | Window for the above. |
+| `IDENTIFY_USER_LIMIT` | `20` | Requests per window **per bearer-token account** on `/api/emergency/*`. |
+| `IDENTIFY_USER_WINDOW_SECONDS` | `60` | Window for the above. |
 | `AUTH_LIMIT` | `30` | Requests per window on `/api/auth/*`. |
 | `AUTH_WINDOW_SECONDS` | `60` | Window for the above. Also drives idle-key cleanup at 10x. |
 
-State is per-process, so the effective limit multiplies by the worker count. Move
-this to Redis before scaling out.
+Every route family is keyed on **IP**. Identification is additionally keyed on
+**account** when the caller presents an `Authorization: Bearer` header, because
+enumeration is this product's real threat and an IP key alone is defeated by
+address rotation or a shared NAT gateway while the account stays stable. The
+account key is derived by *decoding* the token, not verifying it: the signature
+check happens in the route dependency, and re-verifying would mean decoding on
+every request. A forged `sub` therefore buys a window keyed on a value the
+attacker chose, which grants nothing the per-IP key did not already grant, and
+the route still rejects the token. The key's only job is to hold a *legitimate*
+account to its own budget.
+
+**State is per-process.** With `N` uvicorn workers the effective limit is
+`limit * N`, and a restart clears every window. This is the one rate-limit
+control that is genuinely not production-grade: it must move to a shared store
+(Redis is the obvious candidate) before horizontal scaling. The interface is
+deliberately narrow so that swap is contained to `app/security/rate_limit.py`.
+
+Every rejection returns **429** with `retry_after` in the body and a `Retry-After`
+header, and writes a `rate_limited` row to `audit_logs`. The audit write is
+wrapped in a bare `except`: a failing audit must not turn a 429 into a 500, and
+a missing audit row is a lesser problem than a crashed limiter.
 
 ## Uploads
 
@@ -125,11 +146,25 @@ this to Redis before scaling out.
 |---|---|---|
 | `MAX_UPLOAD_BYTES` | `6291456` (6 MiB) | Image size ceiling. Exceeding it is **413**. |
 | `ALLOWED_IMAGE_MIMES` | `image/jpeg`, `image/png`, `image/webp` | Magic-byte allowlist. |
+| `MAX_IMAGE_PIXELS` | `24000000` (24 MP) | Decoded pixel ceiling. Exceeding it is **413**. |
+| `MAX_IMAGE_ASPECT_RATIO` | `8.0` | Longest side over shortest. Exceeding it is **422**. |
 
-Both are read into module constants in `app/utils/helpers.py` **at import time**,
-so changing them requires a process restart. Validation order is length pre-check,
-strict base64 decode, size, minimum 16 bytes, magic bytes, then a real PIL
-decode - so a corrupt file is rejected as 422 rather than crashing the decoder.
+`MAX_UPLOAD_BYTES` and `ALLOWED_IMAGE_MIMES` are read into module constants
+(`_MAX_SIZE`, `_MIME`) **at import time**, so changing them requires a process
+restart. `MAX_IMAGE_PIXELS` and `MAX_IMAGE_ASPECT_RATIO` are read from `settings`
+at call time, so they take effect without a restart.
+
+**Why the pixel cap exists.** The byte cap and the magic-byte check are both
+cheap and both are trivially defeated by a small file: a PNG under 6 MiB can
+declare 40000 x 40000, which expands to roughly 6.4 GB of RGBA. Validation order
+is length pre-check, strict base64 decode, byte size, minimum 16 bytes, magic
+bytes, **dimension check**, then a real PIL decode. The dimension check happens
+before `load()` so the allocation never occurs. PIL warns below its own hard
+threshold and raises above it, which means relying on PIL alone accepts whatever
+PIL decided to merely warn about; this project decides for itself. 24 MP is
+roughly a 6000x4000 sensor with headroom, and the YuNet input is resized to
+112x112 regardless. The aspect-ratio check is a second decompression trick for
+near-zero cost: no real face photograph is an 8:1 strip.
 
 ## Biometric engine
 
