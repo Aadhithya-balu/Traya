@@ -654,3 +654,96 @@ def test_policy_count_does_not_grow_across_runs(reapplied):
         ).fetchall()
     assert rows == [], f"duplicate policies: {rows}"
 
+
+# -------------------------------------------------- the inert-policy guard
+
+
+def test_every_policy_carrying_table_has_rls_enabled(policies_applied):
+    """A policy on an RLS-off table is decoration, and nothing warns.
+
+    This is the check that would have caught `incident_events` before it reached
+    production. The table was created by Alembic after `005_enable_rls.sql` had
+    already swept the schema, so it inherited neither RLS nor a grant. `007` then
+    created a correct policy and a correct grant on it, and every behavioural
+    probe still passed, because the probes run as `traya_api` and had no policy
+    to violate. Only the structural count noticed: 22 of 23 tables enabled.
+
+    So this asserts the invariant directly rather than relying on someone reading
+    a count.
+    """
+    with engine.begin() as conn:
+        unguarded = conn.exec_driver_sql(
+            "select c.relname from pg_class c "
+            "join pg_namespace n on n.oid = c.relnamespace "
+            "join pg_policy pol on pol.polrelid = c.oid "
+            "where n.nspname = current_schema() and c.relkind = 'r' "
+            "and not c.relrowsecurity and pol.polroles <> array[0]::oid[]"
+        ).fetchall()
+
+    assert unguarded == [], (
+        f"policy present but RLS disabled on {unguarded}: the policy is inert and "
+        "every holder of the grant reads every row"
+    )
+
+
+def test_deployment_sql_raises_when_a_policy_table_lacks_rls(policies_applied):
+    """The assertion at the end of `007` must actually fire.
+
+    A guard that cannot fail is a comment. This disables RLS on `users`, which
+    the file does *not* enable explicitly (it is `005`'s job, and `005` only
+    sweeps tables that existed when it ran), re-runs `007`, and requires the
+    exception.
+
+    Note what is deliberately *not* used as the subject here: `incident_events`.
+    That table is enabled explicitly at the top of the file, so the file repairs
+    it before reaching the assertion, and the assertion correctly finds nothing.
+    Self-healing the table it owns is the fix; the assertion is the backstop for
+    every table it does not.
+    """
+    with engine.begin() as conn:
+        conn.exec_driver_sql("alter table users disable row level security")
+
+    try:
+        sql = (SUPABASE_SQL / "007_rls_policies.sql").read_text(encoding="utf-8")
+        with pytest.raises(exc.ProgrammingError, match="role-scoped policy"):
+            with engine.begin() as conn:
+                conn.exec_driver_sql(sql)
+    finally:
+        with engine.begin() as conn:
+            conn.exec_driver_sql("alter table users enable row level security")
+
+    with engine.begin() as conn:
+        still_on = conn.exec_driver_sql(
+            "select c.relrowsecurity from pg_class c "
+            "join pg_namespace n on n.oid = c.relnamespace "
+            "where n.nspname = current_schema() and c.relname = 'users'"
+        ).scalar()
+    assert still_on is True, "the guard test must not leave the table unprotected"
+
+
+def test_deployment_sql_re_enables_a_table_it_owns(policies_applied):
+    """`007` repairs the table whose RLS it inherits from an earlier sweep.
+
+    `005_enable_rls.sql` enables RLS by looping over `pg_tables` at the moment it
+    runs, so a table created by a later Alembic migration inherits nothing. That
+    is precisely how `incident_events` reached hosted with RLS off. Re-running the
+    policies file must therefore be enough to fix it, without asking an operator
+    to remember to run `005` again - which is the step that was missed.
+    """
+    with engine.begin() as conn:
+        conn.exec_driver_sql("alter table incident_events disable row level security")
+
+    sql = (SUPABASE_SQL / "007_rls_policies.sql").read_text(encoding="utf-8")
+    with engine.begin() as conn:
+        conn.exec_driver_sql(sql)
+
+    with engine.begin() as conn:
+        now_on = conn.exec_driver_sql(
+            "select c.relrowsecurity from pg_class c "
+            "join pg_namespace n on n.oid = c.relnamespace "
+            "where n.nspname = current_schema() and c.relname = 'incident_events'"
+        ).scalar()
+
+    assert now_on is True, "applying 007 must re-enable RLS on incident_events"
+
+

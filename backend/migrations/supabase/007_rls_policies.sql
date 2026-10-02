@@ -271,6 +271,8 @@ create policy sessions_update_own on emergency_sessions
 -- events are written by the application connecting as table owner, not through
 -- `traya_api`; a policy without a grant is decorative. The table is SELECT-only
 -- for this role, and the application enforces append-only.
+alter table incident_events enable row level security;
+
 drop policy if exists incident_events_select on incident_events;
 create policy incident_events_select on incident_events
     for select to traya_api
@@ -305,3 +307,43 @@ drop policy if exists permissions_read on permissions;
 create policy permissions_read on permissions
     for select to traya_api
     using (true);
+
+-- ---------------------------------------------------------------- inert policies
+-- A policy on a table whose RLS is not enabled is decoration. Postgres does not
+-- warn; `pg_policies` lists the policy, the grant is in place, and every read
+-- still returns every row to anyone holding the privilege.
+--
+-- That is not hypothetical. `005_enable_rls.sql` enables RLS by looping over the
+-- tables that exist when it runs, so it ran in Phase 4 and covered 22 tables.
+-- `incident_events` was added by Alembic in Phase 7 and inherited nothing: this
+-- file created a correct policy and a correct grant on a table with RLS still
+-- off, and the applied result passed every behavioural probe in
+-- `apply_and_verify_hosted_rls.py` because the probes run as `traya_api`, which
+-- had no policy to violate. Only the structural count caught it, 22 of 23.
+--
+-- So the rule is stated here instead: every table this file names must be
+-- enabled explicitly, and the count is asserted at the end. Enabling twice is a
+-- no-op, so the cost of being explicit is zero.
+--
+-- Raises rather than warns. A migration that reports success while leaving one
+-- table world-readable is the failure mode this block exists to prevent.
+do $$
+declare
+    unguarded text;
+begin
+    select string_agg(c.relname, ', ' order by c.relname)
+      into unguarded
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      join pg_policy pol on pol.polrelid = c.oid
+     where n.nspname = current_schema()
+       and c.relkind = 'r'
+       and not c.relrowsecurity
+       and pol.polroles <> array[0]::oid[];
+
+    if unguarded is not null then
+        raise exception using message =
+            'RLS is not enabled on table(s) carrying a role-scoped policy: ' || unguarded;
+    end if;
+end
+$$;

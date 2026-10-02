@@ -76,10 +76,10 @@ as `postgres` over `psycopg` and never uses `anon` or `authenticated`, so
 removing them broke nothing — verified by re-running the full emergency flow
 afterwards, which still returned 200 with an accepted match.
 
-### RLS is enabled on all 22 tables, and it filters
+### RLS is enabled on all 23 tables, and it filters
 
 `005_enable_rls.sql` turns on `ROW LEVEL SECURITY` everywhere in `public`,
-verified as `22 of 22`. The check that actually matters is not the flag:
+verified as `23 of 23`. The check that actually matters is not the flag:
 
 ```
 created role traya_rls_probe, GRANTED SELECT on all tables in schema public
@@ -92,6 +92,38 @@ audit_logs            rows visible = 0
 A role holding an explicit `GRANT SELECT` on every table reads nothing. That
 is RLS filtering, not a missing grant, and it is asserted in
 `backend/tests/test_rls.py` on every Postgres test run.
+
+**A policy on a table with RLS off is decoration, and nothing warns.** Postgres
+does not object: `pg_policies` lists the policy, the grant is in place, and the
+table still reads in full. This is not hypothetical — it happened.
+
+`005` enables RLS by looping over `pg_tables` *at the moment it runs*, so it
+swept 22 tables when it was first applied. `incident_events` was created later by
+Alembic, in Phase 7, and inherited nothing. `007_rls_policies.sql` then created a
+correct policy and a correct `traya_api` grant for it, and the table sat on the
+hosted project with RLS disabled.
+
+Every behavioural probe still passed. The probes connect as `traya_api`, which
+had a policy it did not violate, so there was nothing to catch. Only a structural
+count noticed — `22 of 23` — and it was reported as a failure rather than
+understood.
+
+Two changes close it:
+
+- `007` enables RLS on `incident_events` explicitly. Enabling twice is a no-op, so
+  the cost is zero and re-running the file repairs the table on its own.
+- `007` ends with an assertion that raises if any table carrying a role-scoped
+  policy still has RLS disabled, so the next table added this way fails loudly
+  instead of deploying quietly.
+
+Both are enforced by `backend/tests/test_rls_policies.py`, including a test that
+disables RLS and requires the assertion to fire — a guard that cannot fail is a
+comment. Re-applying `007` to hosted now reports `23 of 23`, and
+`verify_hosted_app.py` confirms the application is unaffected.
+
+Note the general shape of the bug: the *permission* layer was built and tested,
+and the *enforcement* flag was a separate sweep that ran once. Two mechanisms,
+one invariant.
 
 **`FORCE ROW LEVEL SECURITY` is deliberately not used, and this matters.** A
 table's owner bypasses its own policies, and TRAYA connects as `postgres`, which

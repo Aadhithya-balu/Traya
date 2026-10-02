@@ -21,6 +21,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app.config.settings import settings  # noqa: E402
 from app.main import app  # noqa: E402
+from app.models import all_models  # noqa: E402,F401  (registers the tables)
+from app.database.session import Base  # noqa: E402
 
 engine = create_engine(settings.DATABASE_URL)
 failures: list[str] = []
@@ -57,10 +59,34 @@ with TestClient(app) as c:
         str(db_report.get("backend")),
     )
     check("not degraded", db_report.get("degraded") is False, str(db_report.get("degraded")))
+    # Derived from the ORM rather than hardcoded. The literal was 22, then
+    # `incident_events` arrived in Phase 7 and the check started failing on a
+    # hosted project that was in fact correct - a stale number reported as a
+    # failure is worse than no check, because it trains you to ignore the
+    # output. The question worth asking is "does the app see every table it
+    # declares, and nothing else", and only the models can answer that.
+    #
+    # `alembic_version` is the one expected difference: it is Alembic's
+    # bookkeeping table, it holds a version hash and no application data, and it
+    # is deliberately not an ORM model. Counting it as unexplained drift is
+    # noise; ignoring the rest of the difference is how a half-applied migration
+    # passes this check unnoticed.
+    declared = set(Base.metadata.tables) | {"alembic_version"}
+    with engine.connect() as conn:
+        present = {
+            r[0]
+            for r in conn.exec_driver_sql(
+                "select tablename from pg_tables where schemaname = current_schema()"
+            ).fetchall()
+        }
+
+    missing = sorted(declared - present)
+    extra = sorted(present - declared)
+
     check(
-        "sees all 22 tables",
-        db_report.get("tables") == 22,
-        str(db_report.get("tables")),
+        f"schema matches all {len(declared)} declared tables",
+        db_report.get("tables") == len(declared) and not missing and not extra,
+        f"reported {db_report.get('tables')}, missing {missing or 'none'}, unexpected {extra or 'none'}",
     )
 
     r = c.post(

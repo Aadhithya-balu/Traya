@@ -20,6 +20,7 @@ granted SELECT.
 from __future__ import annotations
 
 import pathlib
+import re
 import uuid
 
 import pytest
@@ -91,10 +92,30 @@ def test_deployment_sql_contains_no_percent_sign_anywhere():
     `AGENTS.md` records the same class of bug for the Tailwind content scanner:
     do not name a class in a comment, because a name in prose is a rule that
     gets emitted. The mechanism differs, the lesson does not.
-    """
-    sql = ENABLE_RLS.read_text(encoding="utf-8")
 
-    assert "%" not in sql, "executable SQL, and its comments, must contain no % for psycopg"
+    Checked across every file in `migrations/supabase/`, not just the ones the
+    test suite executes. `001` and `002` are one-shot hosted setup and `004` is
+    never run by a script, but all of them are pasted into the Supabase SQL
+    editor by hand, which is how this directory reached production. The psycopg
+    restriction applies identically on that path, and a file nothing executes is
+    exactly where the mistake hides: `004` carried a `raise exception` format
+    specifier for months without anything noticing.
+    """
+    files = sorted(SUPABASE_SQL.glob("*.sql"))
+    assert files, f"no deployment SQL found under {SUPABASE_SQL}"
+
+    offenders = []
+    for path in files:
+        sql = path.read_text(encoding="utf-8")
+        if "%" in sql:
+            offenders.append(f"{path.name} at offset {sql.index('%')}")
+
+    assert not offenders, (
+        f"percent sign found in {offenders}. psycopg reads a percent sequence "
+        "as a parameter marker, does not strip comments first, and rejects any "
+        "specifier it does not own even with no parameters supplied. Use "
+        "quote_ident and string concatenation, not format or percent specifiers."
+    )
 
 
 def test_enable_rls_file_is_schema_agnostic():

@@ -60,7 +60,8 @@ begin
     where table_schema = 'public' and grantee = 'anon';
 
     if remaining > 0 then
-        raise exception 'anon still holds % table grant(s) in public', remaining;
+        raise exception using message =
+            'anon still holds ' || remaining || ' table grant(s) in public';
     end if;
 end
 $$;
