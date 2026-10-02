@@ -100,13 +100,23 @@ A bottom sheet: scrim plus an `animate-sheet-in` panel, `role="dialog"`,
 `aria-modal`, Escape to close, and a body scroll lock that saves and restores
 `document.body.style.overflow`.
 
-Returns `null` when `!open`, so it unmounts rather than hiding - meaning there
-is no exit animation.
+**It now behaves as a modal, because it is one.** The panel is `tabIndex={-1}`
+and does three things on open/close:
 
-Accessibility gaps to close if you touch it: **no focus trap and no focus
-restore.** Keyboard users can tab out of the sheet into the page behind it, and
-focus is not returned to the trigger on close. Both are straightforward to add
-and matter for a component that is already marked `aria-modal`.
+- Captures `document.activeElement` and restores focus to it on close.
+- Moves focus to the first focusable inside the sheet (the close button), or to
+  the panel itself if there is none.
+- Traps Tab and Shift+Tab within the panel, wrapping at both ends.
+
+Before Phase 9 it handled Escape only. An overlay marked `aria-modal="true"`
+tells a screen reader to ignore the page behind it, so letting keyboard focus
+walk out of the panel was not a cosmetic gap: assistive tech and the keyboard
+disagreed about where the user was. The focusable selector is the standard set
+(`a[href]`, enabled form controls, non-negative `tabindex`).
+
+Returns `null` when `!open`, so it unmounts rather than hiding - meaning there
+is no exit animation. Focus restoration survives that because the trigger
+element lives outside the sheet.
 
 The scrim is a `<button>` and the panel is its **sibling**, not its child, so
 `onClose` appears twice. That is deliberate: it puts the panel above the scrim
