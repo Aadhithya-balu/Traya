@@ -129,14 +129,16 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 
 | Fact | Value |
 |---|---|
-| Backend tests | **258 passed** on Postgres, **234 passed + 24 skipped** on SQLite after Phase 6 |
-| Backend tests on real Postgres | **258 passed**, no skips, ~115s. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
+| Backend tests | **374 passed + 26 skipped** on SQLite after Phase 10 |
+| Backend tests on real Postgres | runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
 | Hosted Supabase | **Live and verified.** PostgreSQL 17.11, 22 tables, RLS on 22/22 with 19 policies, 7 roles / 18 permissions, emergency flow HIGH_CONFIDENCE 0.995 |
 | Frontend typecheck | **passes**, exit 0, strict TS |
 | `npm run docs:check` | **passes**, 31 pages |
 | Endpoints | **47** across 7 routers |
 | Tables | **22** in `public` (19 ORM models plus `alembic_version` and the two association tables), 4 Alembic migrations |
 | Roles / permissions | **7** / **18** |
+| Settings fields | **48**, all documented in `backend/.env.example` (was 20 of 36 — closed in Phase 11) |
+| Evaluation harness | **built** — `python -m evaluation.run --manifest ...`; 62 tests. **No accuracy claim**, see [docs/MODEL_EVALUATION.md](docs/MODEL_EVALUATION.md) |
 | Default database | **SQLite** (`sqlite:///./traya.db`) |
 | `EMBEDDING_DIM` | **320** — describes the **simulation only**. The real engine is 128D; read `BiometricEngine().dimension` |
 | Real engine | **YuNet + SFace 128D**, weights in `backend/.models/`, **not committed** |
@@ -202,103 +204,136 @@ Ranked in [docs/AUDIT.md](docs/AUDIT.md#bugs-ranked). The five that matter:
 ### Windows / shell
 
 1. PowerShell 5.1. **Never use `&&`.** Use `cmd1; if ($?) { cmd2 }`.
-2. Vite binds `localhost` (IPv6 `::1`); uvicorn binds `127.0.0.1` (IPv4). Probe
+2. **Never round-trip a UTF-8 file through `Get-Content` / `Set-Content`.**
+   PS 5.1 reads a BOM-less UTF-8 file as the system ANSI codepage, so every
+   em-dash and middle dot becomes mojibake, then writes it back *with* a BOM.
+   This silently rewrote 41 lines of `MIGRATION_PLAN.md` before it was caught.
+   Use the `read`/`edit`/`write` tools for file edits. If you must use the shell
+   for anything, `Get-Content -Encoding UTF8` and `[System.IO.File]::WriteAllText`
+   at minimum, and verify with `git diff` afterwards.
+3. **PowerShell 5.1 `Set-Content -Encoding UTF8` writes a BOM.** This leaked
+   `EF BB BF` into three `git commit -F` messages. Write message files with
+   `[System.IO.File]::WriteAllText($p, $text)` or `[IO.File]::WriteAllLines`,
+   or pipe via `-Encoding ascii` where the content is ASCII.
+4. Vite binds `localhost` (IPv6 `::1`); uvicorn binds `127.0.0.1` (IPv4). Probe
    with an explicit host.
-3. **`uvicorn --reload` spawns orphaned `multiprocessing-fork` workers** that
+5. **`uvicorn --reload` spawns orphaned `multiprocessing-fork` workers** that
    inherit the listening socket and survive parent kills, holding port 8000.
    `dev-all.mjs` deliberately runs uvicorn **without** `--reload`. To clear a
    stuck port, kill processes whose commandline matches `uvicorn app.main:app`.
-4. Python is 3.14.2. Use `.venv\Scripts\python.exe`, not bare `python`.
+6. Python is 3.14.2. Use `.venv\Scripts\python.exe`, not bare `python`.
 
 ### Code style
 
-5. **Do not add comments to code unless the user asks.**
-6. **No emojis** in code, docs or replies unless the user asks.
-7. **Prefer a composed class** from `@layer components` (`.btn`, `.card`,
+7. **Do not add comments to code unless the user asks.**
+8. **No emojis** in code, docs or replies unless the user asks.
+9. **Prefer a composed class** from `@layer components` (`.btn`, `.card`,
    `.input`, `.badge`, `.tap`, `.eyebrow`, `.scroll-x`) over a long `className`.
-8. **No `dark:*` variants.** Light and dark share one class name via CSS custom
-   properties. `ink-*` / `slate-*` were **removed** — five pages still use them
-   and are migrating.
-9. **`theme.spacing` is `replace`, not `extend`.** `0.5` is 0.125rem, there is
-   no `5.5` and no `13`. Anything outside the table **compiles to nothing** — the
-   same silent failure as an opacity modifier on a ramp colour.
-10. **44px minimum touch targets** via `.tap`. Phase 2 applied it, so it is no
+10. **No `dark:*` variants.** Light and dark share one class name via CSS custom
+    properties. `ink-*` / `slate-*` were **removed** — five pages still use them
+    and are migrating.
+11. **`theme.spacing` is `replace`, not `extend`.** `0.5` is 0.125rem, there is
+    no `5.5` and no `13`. Anything outside the table **compiles to nothing** —
+    the same silent failure as an opacity modifier on a ramp colour.
+12. **44px minimum touch targets** via `.tap`. Phase 2 applied it, so it is no
     longer purged. An `@layer components` class that no component references
     emits **no CSS at all** — the same silent failure as a bare `var()` colour.
     Do not add a class and leave it unused.
-11. **Contrast is measured, not eyeballed.** `backend/tests/test_contrast.py`
+13. **Contrast is measured, not eyeballed.** `backend/tests/test_contrast.py`
     asserts 4.5:1. A **tinted** pairing is always the worst case: `bg-{tone}/15`
     pulls the background toward `text-{tone}`, so light `--c-warn` measured
     5.20:1 on every plain surface and 4.26:1 on its own badge. Check the tinted
     pair.
-12. **Do not name a Tailwind class inside a comment.** The content scanner does
+14. **Do not name a Tailwind class inside a comment.** The content scanner does
     not strip comments, so a class mentioned in prose is a class the build emits
     a rule for. `test_no_utility_name_appears_only_in_a_comment` fails the build
     on it. Describe the utility in words instead.
 
 ### Frontend architecture
 
-13. **All network calls go through `src/api/client.ts`.** Repo-wide, `fetch(`
+15. **All network calls go through `src/api/client.ts`.** Repo-wide, `fetch(`
     appears exactly twice, both inside the client. Never add a third outside it.
-14. **Layout routes render `<Outlet />`, not `{children}`.** `App.tsx` wraps
+16. **Layout routes render `<Outlet />`, not `{children}`.** `App.tsx` wraps
     pages in `<Route element={<Layout />}>`.
-15. **`EmergencyContext` is a guarded `JSON.parse`** against `sessionStorage`.
+17. **`EmergencyContext` is a guarded `JSON.parse`** against `sessionStorage`.
     Keep the guard.
-16. **Every user-visible string is an i18n key.** Five pages still hardcode
+18. **Every user-visible string is an i18n key.** Five pages still hardcode
     English (see the gap list in §7).
 
 ### Backend architecture
 
-17. **New queries go in `app/repositories/`.** Never in a router or a service.
-18. **Repositories flush but never commit.** The caller owns the transaction, so
+19. **New queries go in `app/repositories/`.** Never in a router or a service.
+20. **Repositories flush but never commit.** The caller owns the transaction, so
     a domain write and its audit row land together. A repository that commits
     breaks that invariant.
-19. **New tables or columns require an Alembic migration**
+21. **New tables or columns require an Alembic migration**
     (`alembic revision --autogenerate`) **plus a check that the demo seed is
     still idempotent** on the migrated schema.
-20. **`migrations/supabase/*.sql` contains no percent signs**, comments
+22. **`migrations/supabase/*.sql` contains no percent signs**, comments
     included. psycopg validates percent sequences even with no parameters and
     rejects any specifier that is not its own, so `format('%I', ...)` raises
     before touching the network. Use `quote_ident` and concatenation. A test
     enforces this.
-21. **Authentication is `Depends(get_current_user)` plus a permission helper**
+23. **Authentication is `Depends(get_current_user)` plus a permission helper**
     from `app/security/permissions.py`. Authorization is a data question, not a
     role-string comparison.
 
 ### Testing
 
-22. **`pytest` env vars go at the very top of `tests/conftest.py`, before any
+24. **`pytest` env vars go at the very top of `tests/conftest.py`, before any
     `app` import** — `TESTING=1`, `DEMO_MODE=1`, `DATABASE_URL`. The suite uses a
     fresh temp SQLite DB, removed per run.
-23. **`TestClient.delete()` has no `json=` kwarg.** Use
+25. **`TestClient.delete()` has no `json=` kwarg.** Use
     `client.request("DELETE", url, headers=..., json=...)`.
-24. **`pytest.ini` sets `addopts = -q`.** Passing another `-q` yields `-qq`,
+26. **`pytest.ini` sets `addopts = -q`.** Passing another `-q` yields `-qq`,
     which suppresses the `N passed` summary. Judge success by `$LASTEXITCODE`,
     not by the missing summary.
+27. **The evaluation metrics are tested against literal scores, not faces.**
+    `tests/test_evaluation.py` uses hand-computable score/label lists on
+    purpose. Never "simplify" those into a real-corpus test: the point is that
+    AUC and EER can be verified on paper before a number is quoted. Two real
+    bugs (AUC integrated over thresholds, EER returning 1.0 on an
+    anti-correlated set) were caught exactly this way.
+28. **A harness that measures nothing must fail, not report zero.**
+    `TrialRunner` records load failures per sample rather than catching and
+    marking them undetected — a swallowed `AttributeError` once reported "0% of
+    trials dropped" for a run that embedded nothing.
 
 ### Biometric determinism
 
-25. **Synthetic face seeds must be deterministic.** The face feature space is
+29. **Synthetic face seeds must be deterministic.** The face feature space is
     small, so arbitrary identity strings collide — observed
     `unknown-person-X9` vs `test-identity` = 0.807. **Never introduce a
     random UUID-based identity into enrollment; it made the suite flaky.** The
     demo no-match identity is `enroll-demo-charlie-99`.
-26. `app/api/demo.py` seeds the demo-enroll face from `user.email`, and
+30. `app/api/demo.py` seeds the demo-enroll face from `user.email`, and
     `test_demo_enroll_works_with_consent` uses a fixed account. On purpose.
-27. **All demo data is fictional and must stay that way.** No real names,
+31. **All demo data is fictional and must stay that way.** No real names,
     addresses, phone numbers or medical histories. Emails ending `.local` are
     rejected by pydantic `EmailStr`; demo uses `.demo.traya` / `.responder.traya`.
 
 ### Security
 
-28. **Biometric embeddings are encrypted at rest (Fernet) and never returned to
+32. **Biometric embeddings are encrypted at rest (Fernet) and never returned to
     clients.** There is no endpoint that returns a vector, and **no agent may add
-    one**. Never log raw vectors. Never log unredacted clinical detail.
-29. **Never log or commit secrets.** `SECRET_KEY` / `ENCRYPTION_KEY` come from
-    `.env`; see `.env.example`.
-30. **`ENCRYPTION_KEY` is derived from `SECRET_KEY` if unset.** Rotating
+    one**. Never log raw vectors. Never log unredacted clinical detail. Both
+    invariants are asserted against the whole source tree in
+    `tests/test_security_phase11.py`, not only against the paths that exist
+    today, so adding the offending endpoint later fails the build.
+33. **Never log or commit secrets.** `SECRET_KEY` / `ENCRYPTION_KEY` come from
+    `.env`; see `.env.example`. A test refuses a `service_role` string anywhere
+    in `frontend/src` — it bypasses RLS, which is the whole authorization model.
+34. **`ENCRYPTION_KEY` is derived from `SECRET_KEY` if unset.** Rotating
     `SECRET_KEY` without setting `ENCRYPTION_KEY` makes every stored embedding
     **permanently unreadable**. Set both, together, deliberately.
+35. **An upload is attacker-supplied.** `MAX_UPLOAD_BYTES` is defeated by a small
+    file declaring enormous dimensions, so `MAX_IMAGE_PIXELS` and
+    `MAX_IMAGE_ASPECT_RATIO` are checked *before* `Image.load()`. Do not move
+    that check after the decode.
+36. **Rate limiting is per-process.** The window is a dict in the app process,
+    so the effective limit is `limit * workers`. It is keyed on IP *and*, for
+    identification, on the decoded (not verified) bearer `sub`. It must move to
+    a shared store before horizontal scaling.
 
 ---
 
@@ -502,11 +537,15 @@ diagnostic an unexplained 422 has). Details in
    longer among them — Phase 6 wired all of it — but `common`, `result`,
    `medical`, `location`, `profile`, `admin` and `emergency` still carry keys no
    page renders, and `Privacy` does not use its own namespace at all.
-6. **`backend/.env.example` documents 20 of 36 settings.**
+6. ~~**`backend/.env.example` documents 20 of 36 settings.**~~ **Fixed in Phase
+   11** — all 48 are documented, and a test fails the build if one is added
+   without a line here. Do not re-report.
 7. **No frontend test runner.** Frontend changes are verified by typecheck and
    build. `backend/tests/test_frontend_contract.py` exists to catch client/server
    literal mismatches — put new ones there.
-8. **Tokens live in `localStorage`** and there is no CSP.
+8. **Tokens live in `localStorage`** and there is no CSP. Moving to httpOnly
+   cookies needs CSRF protection and touches every authenticated request; it is
+   recorded as the remaining T6 weakness rather than rushed in.
 9. **No browser, camera or E2E run has happened.** The emergency flow is fixed
    by contract test, not observed working in a hand. The real engine has been run
    against three photographs, never against a live camera.

@@ -200,14 +200,90 @@ visible rather than assumed.
 
 ## Results
 
-**Every cell below is still `_pending_`, and that is the honest state.** The
-[Phase 5 measurements](#phase-5-measurements-real-engine) above are not results
-in this sense: they are three photographs of two people, which is enough to prove
-the pipeline runs and the descriptor separates two identities, and nowhere near
-enough to compute a rate. The gap between those two statements is the whole
-subject of Phase 10.
+**The validation table is still `_pending_`, and that remains the honest
+state.** Phase 10 built the harness that would fill it. It did not fill it,
+because filling it requires a consented corpus that does not exist in this
+repository, and the correct response to a missing measurement is to say so
+rather than to substitute a number that looks like one.
 
-Reproduce the commands before filling any cell.
+### What Phase 10 actually produced
+
+An evaluation harness that runs today, end to end, against the real 128D
+engine:
+
+```powershell
+cd backend
+.venv\Scripts\python.exe -m evaluation.run --manifest evaluation\datasets\smoke.json --verify-digests
+```
+
+| Artefact | Path |
+| --- | --- |
+| Harness | `backend/evaluation/{metrics,dataset,harness,run}.py` |
+| Metric tests | `backend/tests/test_evaluation.py` (46) |
+| Reporting tests | `backend/tests/test_evaluation_harness.py` (16) |
+| Smoke manifest | `backend/evaluation/datasets/smoke.json` |
+| Run artefacts | `backend/evaluation/runs/<timestamp>/` |
+
+What it does that a spreadsheet does not:
+
+1. **It refuses to certify a corpus that cannot support a claim.** A corpus
+   below 5 subjects, or under 2 samples each, or spanning fewer than 3 condition
+   axes, or with no recorded consent basis, is reported as `SMOKE TEST` with the
+   specific reasons, and `--require-grade` exits non-zero. The smoke corpus here
+   reports all four reasons.
+2. **Every rate carries a Wilson 95% interval.** This is the single most
+   important property, and it is why the smoke run is worth reading below.
+3. **It separates "no face detected" from "low score."** A detection failure is
+   never folded into the score distribution, because doing so adds mass at the
+   bottom of the impostor range and quietly *improves* separability.
+4. **Detection and match latency are reported separately.** Quoting only the
+   cosine similarity makes this system look ~500x faster than a responder
+   experiences it.
+
+### The smoke run, and why its headline is worthless
+
+Run `20261002T082556+0000`, engine `YuNet128Provider` / `sface-128d-v1` / 128D:
+
+| Figure | Value | Trials | What it does not mean |
+| --- | --- | --- | --- |
+| EER | 0.0000 @ 0.8977 | 1 genuine, 2 impostor | Not an EER. One genuine trial cannot produce a rate. |
+| AUC | 1.0000 | 3 | Meaningless at n=3. |
+| Margin | 0.6185 | 3 | The one figure that survives, and even it is 3 points. |
+| FAR @ 0.60 | 0.0000 | 2 | **95% CI [0.0000, 0.4899]** |
+| FRR @ 0.60 | 0.0000 | 1 | **95% CI [0.0000, 0.7935]** |
+| Embed latency | p50 30.59 ms, p95 79.42 ms | 3 | The only trustworthy row here. |
+
+Read the intervals. **A measured FAR of 0.0000 from 2 impostor trials carries an
+upper bound of 0.49** - a coin flip. Published without the interval, "FAR 0.0"
+would read as a security property and mean nothing. This is exactly the
+discipline the harness exists to enforce, and it is why the Wilson bound is
+implemented rather than a bare proportion.
+
+The latency row is real and useful: ~31 ms median to detect, align and embed one
+image is comfortably inside an in-emergency flow. It is also the only number in
+this table that does not depend on having more data.
+
+Note what the margins show against the simulation: the best impostor pair scores
+0.2792 and the genuine pair 0.8977, so the current seeded thresholds
+(`HIGH_CONFIDENCE 0.82`, `REVIEW 0.62`) happen to separate these three points.
+Three points cannot validate a threshold. They can only fail to embarrass one,
+which is not the same thing.
+
+### Still pending
+
+| Metric | Value | Blocked on |
+| --- | --- | --- |
+| Genuine / impostor trials at scale | _pending_ | a consented corpus |
+| FAR / FRR at scale, with intervals | _pending_ | the same |
+| EER, AUC, per condition | _pending_ | the same |
+| Threshold chosen from a ROC point | _pending_ | the same |
+| Threshold version recorded in `system_settings` | _pending_ | a chosen threshold |
+| Latency across conditions and devices | _pending_ | the corpus |
+| ArcFace-512D comparison | _pending_ | a 512D runtime; not installable on Python 3.14 here |
+
+**Until these are filled, no threshold in this project is calibrated.** The
+seeded values remain the simulation's. `ENROLLMENT_MIN_SELF_SIMILARITY` (0.62)
+remains a copy of `REVIEW_THRESHOLD` rather than a measurement.
 
 ### Headline
 
@@ -216,6 +292,7 @@ Reproduce the commands before filling any cell.
 | Model | SFace 128D + YuNet (from [Phase 5](#phase-5-measurements-real-engine)) | `pytest tests/test_real_engine.py` |
 | Embedding dimension | 128 | same |
 | Metric | cosine similarity | same |
+| Harness | **built and passing** | `python -m evaluation.run --help` |
 | Genuine trials | _pending_ | _pending_ |
 | Impostor trials | _pending_ | _pending_ |
 | FAR @ auto-accept | _pending_ | _pending_ |
@@ -223,7 +300,8 @@ Reproduce the commands before filling any cell.
 | EER | _pending_ | _pending_ |
 | Threshold | _pending_ | _pending_ |
 | Threshold version | _pending_ | _pending_ |
-| Latency p50 / p95 | _pending_ | _pending_ |
+| Embed latency p50 / p95 | 30.59 / 79.42 ms (n=3) | smoke run above |
+| Match latency p50 / p95 | 0.058 / 0.072 ms (n=3) | smoke run above |
 
 ### Per condition
 
@@ -277,17 +355,50 @@ UI change, and a re-enrollment data migration.
 ## Reproducing
 
 ```powershell
-cd backend; .venv\Scripts\python.exe -m pytest tests\test_evaluation.py -v
+cd backend; .venv\Scripts\python.exe -m pytest tests\test_evaluation.py tests\test_evaluation_harness.py -v
+cd backend; .venv\Scripts\python.exe -m evaluation.run --manifest evaluation\datasets\smoke.json --verify-digests
 ```
+
+Useful flags:
+
+| Flag | Effect |
+| --- | --- |
+| `--verify-digests` | Fail if any image no longer matches its recorded sha256. |
+| `--require-grade` | Exit 1 unless the corpus can support an accuracy claim. Use in CI. |
+| `--target-far` | The FAR the reported operating point should land near. Default 0.01. |
+| `--threshold` | Extra threshold to report. Repeatable. |
+| `--no-write` | Print without writing a run directory. |
 
 The evaluation harness must:
 
-1. Load the dataset by manifest, never a random sample at runtime.
-2. Print the model name, version and dimension before any result.
+1. Load the dataset by manifest, never a random sample at runtime. **Done** -
+   `evaluation/dataset.py` refuses absolute paths, duplicate ids, unknown
+   versions, missing images and non-integer subject ids.
+2. Print the model name, version and dimension before any result. **Done** -
+   `run.py` prints the engine banner before loading trials.
 3. Write results to `backend/evaluation/runs/<timestamp>/` with the full
    configuration, so a number can always be traced to the run that produced it.
+   **Done** - `report.json`, `summary.md`, `trials.jsonl`, `run_config.json`.
 4. Be deterministic given a seed, so a change in results means a change in the
-   system.
+   system. **Done by construction** - each sample is embedded once and cached,
+   so no score depends on trial order.
+
+### Two metric definitions worth stating, because both were wrong first
+
+**AUC** integrates over the FAR axis. A version that weights by the gap between
+*thresholds* produces an area that depends on the units of the score, so adding
+0.1 to every similarity would change the reported AUC of an identically-ranked
+system. There is a test for exactly this.
+
+**EER** is `min over t of max(FAR(t), FRR(t))`, not "where FAR crosses FRR". On
+an anti-correlated set - every impostor ranked above every genuine - FAR and FRR
+are equal at 1.0, so a crossing search returns EER 1.0 by finding the threshold
+at which *every trial is wrong*. `max` never prefers that, and returns the
+honest 0.5. There is a test for that too.
+
+Both were caught by this file's own tests during Phase 10, which is the argument
+for testing metrics against hand-computed scores before trusting them with a
+figure anyone will quote.
 
 ## Limitations
 

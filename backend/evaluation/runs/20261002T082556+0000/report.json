@@ -1,0 +1,300 @@
+{
+  "engine": {
+    "name": "YuNet128Provider",
+    "version": "sface-128d-v1",
+    "dimension": 128,
+    "is_simulation": false,
+    "detection_version": "",
+    "preprocessing_version": "aligned112-rgb-v1"
+  },
+  "dataset_name": "smoke-3photos-2people",
+  "generated_at": "2026-10-02T08:25:56+00:00",
+  "evaluation_grade": false,
+  "reasons": [
+    "only 2 subject(s); 5 is the floor for a rate",
+    "subject(s) with fewer than 2 samples: [2]",
+    "only 1 condition(s); an aggregate alone hides which capture instruction to change"
+  ],
+  "totals": {
+    "n_samples": 3,
+    "n_subjects": 2,
+    "n_conditions": 1,
+    "n_genuine": 1,
+    "n_impostor": 2,
+    "coverage_gaps": [
+      "lighting",
+      "pose",
+      "expression",
+      "distance",
+      "occlusion",
+      "resolution",
+      "accessories"
+    ],
+    "synthetic": false
+  },
+  "aggregate": {
+    "far_frr": {},
+    "eer": {
+      "threshold": 0.8977031557848009,
+      "eer": 0.0
+    },
+    "auc": 1.0,
+    "margin": {
+      "worst_genuine": 0.8977031557848009,
+      "best_impostor": 0.27922446267546464,
+      "margin": 0.6184786931093362,
+      "overlaps": false
+    },
+    "score_percentiles": {
+      "p1": 0.2572575107619087,
+      "p5": 0.2572575107619087,
+      "p50": 0.27922446267546464,
+      "p95": 0.8977031557848009,
+      "p99": 0.8977031557848009
+    }
+  },
+  "per_condition": {
+    "ideal": {
+      "n_genuine": 1,
+      "n_impostor": 2,
+      "eer": {
+        "threshold": 0.8977031557848009,
+        "eer": 0.0
+      },
+      "margin": {
+        "worst_genuine": 0.8977031557848009,
+        "best_impostor": 0.27922446267546464,
+        "margin": 0.6184786931093362,
+        "overlaps": false
+      },
+      "mean_genuine": 0.8977031557848009,
+      "mean_impostor": 0.2682409867186867,
+      "scores": {
+        "p5": 0.2572575107619087,
+        "p50": 0.27922446267546464,
+        "p95": 0.8977031557848009
+      }
+    }
+  },
+  "latency": {
+    "match_p50_ms": 0.057999975979328156,
+    "match_p95_ms": 0.0716999638825655,
+    "embed_p50_ms": 30.58940009213984,
+    "embed_p95_ms": 79.42490000277758,
+    "embed_mean_ms": 44.162733402724065,
+    "n_embeddings": 3,
+    "n_matches": 3,
+    "note": "end-to-end per-image cost is embed_p95_ms; match_* is the cosine similarity alone and excludes detection and alignment"
+  },
+  "detection": {
+    "trials_total": 3,
+    "trials_usable": 3,
+    "trials_dropped": 0,
+    "drop_rate": 0.0
+  },
+  "operating_points": [
+    {
+      "threshold": 0.2572575107619087,
+      "far": {
+        "value": 1.0,
+        "numerator": 2,
+        "denominator": 2,
+        "ci95": [
+          0.34237195288961925,
+          1.0
+        ]
+      },
+      "frr": {
+        "value": 0.0,
+        "numerator": 0,
+        "denominator": 1,
+        "ci95": [
+          0.0,
+          0.7934567085261071
+        ]
+      },
+      "f1": 0.5
+    },
+    {
+      "threshold": 0.27922446267546464,
+      "far": {
+        "value": 0.5,
+        "numerator": 1,
+        "denominator": 2,
+        "ci95": [
+          0.09452865480086614,
+          0.9054713451991339
+        ]
+      },
+      "frr": {
+        "value": 0.0,
+        "numerator": 0,
+        "denominator": 1,
+        "ci95": [
+          0.0,
+          0.7934567085261071
+        ]
+      },
+      "f1": 0.6666666666666666
+    },
+    {
+      "threshold": 0.6,
+      "far": {
+        "value": 0.0,
+        "numerator": 0,
+        "denominator": 2,
+        "ci95": [
+          0.0,
+          0.6576280471103807
+        ]
+      },
+      "frr": {
+        "value": 0.0,
+        "numerator": 0,
+        "denominator": 1,
+        "ci95": [
+          0.0,
+          0.7934567085261071
+        ]
+      },
+      "f1": 1.0
+    },
+    {
+      "threshold": 0.62,
+      "far": {
+        "value": 0.0,
+        "numerator": 0,
+        "denominator": 2,
+        "ci95": [
+          0.0,
+          0.6576280471103807
+        ]
+      },
+      "frr": {
+        "value": 0.0,
+        "numerator": 0,
+        "denominator": 1,
+        "ci95": [
+          0.0,
+          0.7934567085261071
+        ]
+      },
+      "f1": 1.0
+    },
+    {
+      "threshold": 0.82,
+      "far": {
+        "value": 0.0,
+        "numerator": 0,
+        "denominator": 2,
+        "ci95": [
+          0.0,
+          0.6576280471103807
+        ]
+      },
+      "frr": {
+        "value": 0.0,
+        "numerator": 0,
+        "denominator": 1,
+        "ci95": [
+          0.0,
+          0.7934567085261071
+        ]
+      },
+      "f1": 1.0
+    },
+    {
+      "threshold": 0.8977031557848009,
+      "far": {
+        "value": 0.0,
+        "numerator": 0,
+        "denominator": 2,
+        "ci95": [
+          0.0,
+          0.6576280471103807
+        ]
+      },
+      "frr": {
+        "value": 0.0,
+        "numerator": 0,
+        "denominator": 1,
+        "ci95": [
+          0.0,
+          0.7934567085261071
+        ]
+      },
+      "f1": 1.0
+    }
+  ],
+  "at_target_far": {
+    "threshold": 0.6,
+    "far": {
+      "value": 0.0,
+      "numerator": 0,
+      "denominator": 2,
+      "ci95": [
+        0.0,
+        0.6576280471103807
+      ]
+    },
+    "frr": {
+      "value": 0.0,
+      "numerator": 0,
+      "denominator": 1,
+      "ci95": [
+        0.0,
+        0.7934567085261071
+      ]
+    },
+    "f1": 1.0
+  },
+  "trials": [
+    {
+      "trial_id": "s1-ideal-a__s1-ideal-b",
+      "condition": "ideal",
+      "label": true,
+      "kind": "genuine",
+      "probe": "s1-ideal-a",
+      "reference": "s1-ideal-b",
+      "score": 0.8977031557848009,
+      "latency_ms": 0.072,
+      "usable": true,
+      "probe_detected": true,
+      "reference_detected": true,
+      "error": ""
+    },
+    {
+      "trial_id": "s1-ideal-a__s2-ideal-a",
+      "condition": "ideal",
+      "label": false,
+      "kind": "impostor",
+      "probe": "s1-ideal-a",
+      "reference": "s2-ideal-a",
+      "score": 0.2572575107619087,
+      "latency_ms": 0.058,
+      "usable": true,
+      "probe_detected": true,
+      "reference_detected": true,
+      "error": ""
+    },
+    {
+      "trial_id": "s1-ideal-b__s2-ideal-a",
+      "condition": "ideal",
+      "label": false,
+      "kind": "impostor",
+      "probe": "s1-ideal-b",
+      "reference": "s2-ideal-a",
+      "score": 0.27922446267546464,
+      "latency_ms": 0.014,
+      "usable": true,
+      "probe_detected": true,
+      "reference_detected": true,
+      "error": ""
+    }
+  ],
+  "environment": {
+    "python": "3.14.2",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "threshold_target_far": 0.01
+  }
+}

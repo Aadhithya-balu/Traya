@@ -1,0 +1,30 @@
+{
+  "manifest_version": 1,
+  "name": "smoke-3photos-2people",
+  "description": "Three committed photographs of two people, used to prove the harness runs end to end against the real 128D engine. NOT a validation corpus.",
+  "consent": "Photographs are synthetic stand-ins generated for automated tests. No human subject is depicted, so no subject consent is involved and no biometric claim can rest on this corpus.",
+  "provenance": "Rendered by backend/tests fixtures; see test_real_engine.py for the per-image measurements taken when the engine was introduced.",
+  "samples": [
+    {
+      "sample_id": "s1-ideal-a",
+      "path": "../../tests/fixtures/faces/same-person-a.png",
+      "subject_id": 1,
+      "condition": "ideal",
+      "sha256": "ba06f6701f7260998b430c39b6557f775497e6ce7b1a74f0b7ea6af371bf54a6"
+    },
+    {
+      "sample_id": "s1-ideal-b",
+      "path": "../../tests/fixtures/faces/same-person-b.png",
+      "subject_id": 1,
+      "condition": "ideal",
+      "sha256": "b3047772e0dc6c9d83c26f64894ca1a897f799f855c5574ac24b2ef934c2978e"
+    },
+    {
+      "sample_id": "s2-ideal-a",
+      "path": "../../tests/fixtures/faces/other-person.png",
+      "subject_id": 2,
+      "condition": "ideal",
+      "sha256": "1d570e49654e84c7a943918537bd9e5e1ef82920152e147c834006e235be97c9"
+    }
+  ]
+}

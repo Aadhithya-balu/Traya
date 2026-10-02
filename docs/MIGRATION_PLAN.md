@@ -919,6 +919,60 @@ Low. The design system from Phase 2 is the foundation.
 Low as engineering, high as a **claim-discipline** gate. If the numbers are bad,
 the response is to publish them and say so, not to widen the threshold.
 
+### Outcome: the harness is built; the numbers are not, and cannot be yet
+
+**The gate is not met, and the reason is a missing input rather than missing
+work.** A validation dataset of real faces, gathered with documented consent,
+does not exist in this repository and cannot be conjured by a phase. So Phase 10
+delivered the *instrumentation* that makes the measurement reproducible once the
+corpus exists, and recorded that the accuracy claim is still unavailable, with
+the specific reason.
+
+What now runs:
+
+```powershell
+cd backend
+.venv\Scripts\python.exe -m evaluation.run --manifest evaluation\datasets\smoke.json --verify-digests
+```
+
+`backend/evaluation/` holds `metrics.py` (FAR, FRR, precision, recall, F1, ROC,
+AUC, EER, margin, percentiles, Wilson intervals), `dataset.py` (manifests, trial
+expansion, coverage analysis), `harness.py` (report assembly and run artefacts)
+and `run.py` (the CLI). 62 tests across `tests/test_evaluation.py` and
+`tests/test_evaluation_harness.py`.
+
+**The measurement-discipline gate items are met in the strong sense: they are
+enforced by code, not by convention.**
+
+- A corpus that cannot support a claim is labelled `SMOKE TEST` with its
+  specific shortfalls, and `--require-grade` exits non-zero.
+- Every rate carries a Wilson 95% interval. A rate over an empty class is
+  reported as `None`, never `0.0`.
+- AUC integrates over the FAR axis and EER is `min max(FAR, FRR)`. Both were
+  wrong in the first implementation and were caught by hand-computed tests,
+  which is the argument for testing metrics on literal scores before quoting
+  them.
+- A detection failure is never scored as a low similarity, because that would
+  add mass to the bottom of the impostor distribution and flatter the result.
+
+**Two gate items are not met and are not close to met.** No threshold has been
+chosen from a ROC point, because there is no ROC to choose from;
+`threshold_version` in `system_settings` is still unwritten, and the
+`MULTIPLE_CANDIDATES` margin (0.03) still has no measured basis. The model
+comparison table stays `_pending`: ArcFace-512D cannot be installed on Python
+3.14 here without a compiler, so it is neither run nor dismissed.
+
+The one genuinely useful new measurement is latency, because it does not depend
+on corpus size: **~31 ms median, ~79 ms p95** to detect, align and embed one
+image with YuNet + SFace. The cosine search itself is ~0.06 ms and is reported
+separately, so it cannot be mistaken for the end-to-end cost.
+
+The smoke run is the best argument for the harness existing. It prints EER
+0.0000 and FAR 0.0000 from three photographs directly beside
+`95% CI [0.0000, 0.4899]`. Without the interval that row reads as a security
+property. With it, it reads as what it is: three points that cannot fail to
+embarrass a threshold, which is not the same as validating one.
+
 ## Phase 11 - Security pass
 
 **Depends on** Phases 3 and 4.

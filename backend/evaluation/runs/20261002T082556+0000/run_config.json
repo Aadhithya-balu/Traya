@@ -1,0 +1,8 @@
+{
+  "argv": [
+    "C:\\Traya\\backend\\evaluation\\run.py",
+    "--manifest",
+    "evaluation\\datasets\\smoke.json"
+  ],
+  "manifest": "evaluation\\datasets\\smoke.json"
+}
