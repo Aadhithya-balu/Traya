@@ -50,9 +50,11 @@ src/
   `@layer components`.
 - **Mobile-first.** Layout is designed for 320px; wider breakpoints are
   enhancements.
-- **Every user-visible string is an i18n key.** The five legacy pages under
-  [design-system.md](design-system.md#legacy-pages) are the exception, and they
-  are on the list to fix.
+- **Every user-visible string is an i18n key.** Phase 9 took the last five
+  pages onto `t()`, and
+  `test_no_page_or_component_hardcodes_user_visible_english` fails the build if
+  a literal returns. The Tamil catalogue has had no native review, so the guard
+  proves the script and placeholders, not the meaning.
 - **Simulation disclosure is mandatory** wherever an `IdentifyResult` is
   rendered. See [ADR 0001](../decisions/0001-simulation-biometric-engine.md).
 

@@ -22,7 +22,7 @@ covered in [routing.md](routing.md).
 **legacy** = colour is migrated but strings are still hardcoded English.
 Phase 1 moved every page off the removed `ink-*`/`slate-*` palette, so
 **colour is no longer what makes a page legacy** — see
-[design-system.md](design-system.md#the-palette-migration-is-done-the-hardcoded-english-is-not).
+[design-system.md](design-system.md#the-palette-migration-is-done-and-so-is-the-string-migration).
 
 **Phase 9 closed the string half.** Every page now resolves its user-visible
 copy through `t()`, and `test_no_page_or_component_hardcodes_user_visible_english`

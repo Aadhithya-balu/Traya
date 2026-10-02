@@ -859,6 +859,21 @@ authentication state.
 
 Very low.
 
+### Outcome - complete
+
+Eight tests in `backend/tests/test_auth_preservation.py`, all passing on both
+databases. The gate is met:
+
+- `test_authenticated_user_stays_authenticated_through_emergency` runs the full
+  start / capture / identify / confirm cycle and asserts `/auth/me` returns the
+  same user afterwards.
+- `test_an_anonymous_visitor_is_still_anonymous_afterwards` asserts the reverse.
+- `Logout` renders only when `isAuthed && !onEmergencyFlow` (`Layout.tsx`), so it
+  is unreachable from every `/emergency/*` route.
+- `AuthContext` has four distinct states — `loading`, `authenticated`,
+  `unauthenticated`, `error` — and `Guards` renders `auth.session.unreachable`
+  with a retry on `error` instead of treating a transient failure as logged out.
+
 ## Phase 9 - UI rebuild
 
 **Depends on** Phase 7.
@@ -889,6 +904,29 @@ Very low.
 ### Risk
 
 Low. The design system from Phase 2 is the foundation.
+
+### Outcome - the code is done; the eye-and-AT checks are not
+
+Three commits: `f5f97e8` (result states and the catalogue move), `1f14b24` (the
+last five pages), `fc814e8` (`Sheet` focus management).
+
+| Gate item | State |
+|---|---|
+| Zero hardcoded user-visible English outside the catalogues | Met — scanner in `test_frontend_contract.py`, mutation-checked on the three strings that shipped |
+| Tamil and English complete, no key missing | Met — 440 keys each, symmetric |
+| Every result state reachable, each with a working next action | Met — see `api/resultStates.ts` and `StatusBadge` |
+| Keyboard-only completion of the full emergency flow | **Unverified** |
+| A screen reader announces every capture and identification state | **Unverified** |
+| Verified at all eight breakpoints | **Unverified** |
+
+The last three rows are the point of the phase, so it is not complete. What is
+done in code: `Sheet` traps and restores focus, `Tabs` keeps a roving tabindex,
+`LiveStatus` is a polite/assertive live region used for capture and
+identification, every input is labelled, and `prefers-reduced-motion` is honoured
+globally by the wildcard rule at `index.css:263`. What is not done: no browser
+has rendered a page, so overflow, the running focus order, and the actual
+announcements are asserted by inspection only. Item 6 (desktop surfaces) is
+likewise unverified.
 
 ## Phase 10 - ML evaluation
 
@@ -1000,6 +1038,23 @@ embarrass a threshold, which is not the same as validating one.
 
 Low.
 
+### Outcome - gate met; the cookie migration is recorded as not done
+
+Two test files, `test_security_phase11.py` and
+`test_security_phase11_limits.py`.
+
+| Gate item | State |
+|---|---|
+| No secrets in frontend code or the repo | Met — `service_role` scan plus an env-value scan |
+| An enumeration attempt is rate-limited and audited | Met |
+| A malicious upload is rejected without a 500 | Met — pixel bomb and aspect ratio checked before decode |
+| A test proves no endpoint returns an embedding | Met |
+| A test proves logs contain no vectors | Met — and no raw clinical detail |
+
+Step 9, **migrating session storage to an httpOnly cookie**, is deliberately not
+done and stays the recorded T6 weakness: it needs CSRF protection and touches
+every authenticated request. Tokens still live in `localStorage`.
+
 ## Phase 12 - Documentation
 
 Continuous, formalised here. The existing contract stays: one H1, a
@@ -1023,6 +1078,24 @@ non-technical stakeholders, and `MODEL_EVALUATION.md` from Phase 10.
 
 Low, but this is the gate most often skipped and the one that keeps the next
 agent from rediscovering everything from scratch.
+
+### Outcome - contract green; the numbered brief is unwritten
+
+`npm run docs:check` passes across 31 pages, and every endpoint, model, table,
+migration, repository method, service function, setting, role, permission, page,
+component, icon, API method and exported type is named on its owning page.
+
+Two honest notes:
+
+- The **`01_Project_Overview` through `26_Future_Scope`** set named above was
+  never created. The operative documentation is the 31 topical pages under
+  `docs/`, which the check enforces. If the numbered set is a required
+  deliverable it is unwritten, and generating it wholesale risks the
+  "no aspirational documentation" rule the gate itself sets.
+- Phase 9 corrected a batch of stale claims in these pages: the test counts, the
+  "five pages hardcode English" rows, the unused `privacy.title`, and a heading
+  anchor the palette migration had renamed. Where a claim looked wrong it was
+  changed, not left.
 
 ## Phase 13 - End-to-end verification
 
@@ -1054,6 +1127,14 @@ breakpoint sweep.
 ### Risk
 
 None. This phase changes nothing.
+
+### Outcome - not started
+
+No journey has been run in a browser or against a live camera. The emergency
+flow, the no-match fallback, the cross-role matrix and the breakpoint sweep are
+all asserted only by contract test. The definition of done is not met, and the
+one irreversible action the plan defers until this passes — deleting the SQLite
+database — is therefore still deferred.
 
 ## Dependency graph
 

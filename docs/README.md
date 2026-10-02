@@ -140,10 +140,9 @@ do what you would assume. They are documented as they are, not as intended:
 | Known gap | Where |
 |---|---|
 | `database/` SQL and RLS assets do not exist | [operations](operations/README.md#sql-assets) |
-| No row-level security; authorization is Python-only | [architecture](ARCHITECTURE.md#database) |
+| RLS is on all 23 tables, but the app connects as owner and bypasses it | [ADR 0007](decisions/0007-rls-claims-and-live-role-resolution.md) |
 | `SimulationNotice` is never rendered | [components](frontend/components.md#simulationnotice) |
-| Five pages still hardcode English | [pages](frontend/pages.md#legacy-pages) |
-| `.env.example` covers 20 of 36 settings | [operations](operations/README.md#env-example-is-incomplete) |
+| Tamil has had no native-speaker review | [design-system](frontend/design-system.md#i18n-namespaces) |
 | No frontend test runner | [operations](operations/README.md#testing) |
 | No browser, camera or E2E run | [audit](AUDIT.md#still-not-verified) |
 
@@ -160,9 +159,10 @@ them only on their own badge tint — and the camera-error bar used `text-text` 
 `backend/tests/test_contrast.py` rather than eyeballed. See the
 [design system](frontend/design-system.md#contrast-is-measured-against-the-background-that-actually-renders).
 
-**Still open, and not fixed by either phase**: the five legacy pages hardcode
-English, and `SimulationNotice` is still dead code next to the `EngineDisclosure`
-that replaced its job inline.
+**Still open**: `SimulationNotice` is dead code next to the `EngineDisclosure`
+that replaced its job inline, and no browser, screen reader or camera run has
+happened, so the frontend's keyboard, live-region and breakpoint behaviour is
+asserted by inspection rather than observed.
 
 **Closed in Phase 6**: the 2-4 file upload is gone from `Profile.tsx`, enrollment
 stores the **normalised centroid** of the accepted samples rather than N

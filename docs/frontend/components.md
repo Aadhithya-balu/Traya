@@ -80,10 +80,11 @@ control.
 `components/Guards.tsx` -> `Protected`, `AdminOnly`. Both take `children`.
 See [routing.md](routing.md#guards) for the logic.
 
-Both render a hardcoded English `Loading...` string (not an i18n key). The
-`text-slate-400` is fixed — migrated to `text-muted` in Phase 1 — so the fallback
-is legible in both themes. The string itself is still Phase 2 work; replace it
-with `t("common.loading")`.
+Both render `t("common.loading")`, not a literal. The `text-slate-400` was fixed
+in Phase 1, and the string was the last English in the component; Phase 9 moved
+it to `common.loading`. The `error` state renders `auth.session.unreachable` with
+`common.retry` and `nav.home`, so a transient `/auth/me` failure offers a retry
+instead of a logged-out screen.
 
 ## Sheet
 
