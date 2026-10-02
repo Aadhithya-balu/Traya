@@ -112,15 +112,28 @@ cannot measure.
 | `EmergencySession` | `emergency_sessions` | `a8c4ffbe90bd` |
 | `IdentificationAttempt` | `identification_attempts` | `a8c4ffbe90bd` |
 | `IdentificationCandidate` | `identification_candidates` | `a8c4ffbe90bd` |
+| `IncidentEvent` | `incident_events` | `eabc34d087df` |
 | `Location` | `locations` | `a8c4ffbe90bd` |
 
 - `EmergencySession`: `session_code` unique + indexed (`ER-YYYY-NNNNNN`),
   `access_type` (default `public`), `initiator_id`, `access_token_hash` (added by
-  `b32e84ef129d`), `status` (`active`, `completed`, `expired`, `aborted`),
-  `outcome`, JSON `identification_method`, `confidence_category`,
-  `identified_user_id` (indexed, `SET NULL`), `device_id`, `ip_hash`,
-  `created_at`, `expires_at`, `completed_at`. Relationships:
-  `identified_user` (`lazy="selectin"`), `location` (1:1 cascade), `attempts`.
+  `b32e84ef129d`), `status`, `outcome`, JSON `identification_method`,
+  `confidence_category`, `identified_user_id` (indexed, `SET NULL`),
+  `device_id`, `ip_hash`, `created_at`, `expires_at`, `completed_at`.
+  Relationships: `identified_user` (`lazy="selectin"`), `location` (1:1
+  cascade), `attempts`, `events`.
+
+  **The `status` vocabulary changed in Phase 7.** It was `active`, `completed`,
+  `expired`, `aborted`; it is now the ten values in
+  `app/services/incident_service.py`. `active` became `created`, `identifying`,
+  `review_required` or `no_match` depending on how far the attempt got, and
+  `completed` became `identified` or `resolved`. The rename is not cosmetic:
+  `completed` reads as success, and an unidentified person at a hospital
+  entrance is not a success. `expired` and `aborted` were already written by
+  `IncidentRepository` and are kept. Existing rows are **not** rewritten by the
+  migration - the column is unconstrained text and Phase 7 does not rewrite
+  history, so an old `active` row stays `active` and no longer matches the
+  frontend union.
 - `IdentificationAttempt`: `session_id` indexed + CASCADE. The five quality
   scores, `face_count`, `usable`, JSON `method`, `result`, `confidence`,
   `fallback_used`, `created_at`. One row per identification attempt, including
@@ -128,6 +141,29 @@ cannot measure.
 - `IdentificationCandidate`: `attempt_id` indexed + CASCADE, `user_id` indexed +
   CASCADE, `confidence`, `rank`, JSON `method`, `status` (`pending`,
   `confirmed`, `rejected`), `confirmed_by`, `created_at`.
+- `IncidentEvent`: `session_id` indexed + CASCADE, `sequence`,
+  `event_type`, `actor_id`, `subject_id`, `fallback_used`, JSON `details`,
+  `created_at`. **Unique on `(session_id, sequence)`** and that constraint is the
+  real ordering guarantee: `next_sequence()` reads `MAX(sequence) + 1` inside the
+  caller's transaction, which two concurrent responders can race, and the
+  database is what actually stops a duplicate. The endpoint orders by
+  `sequence`, not `created_at`, because two events inside the same millisecond
+  must still have a defined order or the log cannot answer "what happened
+  first".
+
+  Twelve event types: the nine required (`INCIDENT_CREATED`,
+  `FACE_CAPTURE_STARTED`, `FACE_DETECTED`, `MATCH_ATTEMPTED`, `MATCH_FOUND`,
+  `MATCH_REJECTED`, `PROFILE_ACCESSED`, `CONTACT_INITIATED`,
+  `INCIDENT_RESOLVED`) plus `CAPTURE_REJECTED`, `ASSISTANCE_REQUESTED` and
+  `ASSISTANCE_COMPLETED`. `record_event` raises `UnknownEventType` outside the
+  set, so a typo is a test failure rather than a row nothing reads.
+
+  `fallback_used` is one of the four fallback path names and defaults to null on
+  the biometric path. It exists so "how was this person actually identified?"
+  is answerable from the incident alone, without reading the audit trail.
+  Deliberately carries **no clinical detail** - which is why every responder
+  role can hold `view_incident` without that widening what any of them can read
+  about the victim.
 - `Location`: `session_id` nullable + CASCADE, `user_id` nullable + `SET NULL`,
   `latitude`, `longitude`, `accuracy`, `source` (`gps`, `manual`),
   `captured_at`. `source` must describe where the fix came from, because the
@@ -158,7 +194,7 @@ cannot measure.
 
 ## Migration chain
 
-Linear, four revisions. `alembic upgrade head` provisions the schema **and** the
+Linear, five revisions. `alembic upgrade head` provisions the schema **and** the
 access model: `56a8e0eed1a8` calls `ensure_permission_matrix`, so roles and
 permissions exist without a separate seed.
 
@@ -168,6 +204,7 @@ permissions exist without a separate seed.
 | 2 | `56a8e0eed1a8` | `56a8e0eed1a8_permission_matrix_and_hospital_role.py` | Creates `permissions` + `role_permissions`, seeds the matrix via `ensure_permission_matrix`, introduces the `hospital` role. |
 | 3 | `b32e84ef129d` | `b32e84ef129d_emergency_session_access_token.py` | Adds `emergency_sessions.access_token_hash`; force-expires pre-existing `active` sessions that have no hash. |
 | 4 | `c74d0b1e8fa2` | `c74d0b1e8fa2_guided_biometric_enrollment.py` | Creates `biometric_enrollments` + `biometric_enrollment_samples`, including `baseline_offset_x/y` and the composite index. |
+| 5 | `eabc34d087df` | `eabc34d087df_incident_events.py` | Creates `incident_events` with its `session_id` index and the `(session_id, sequence)` unique constraint. |
 
 ## Working with the schema
 

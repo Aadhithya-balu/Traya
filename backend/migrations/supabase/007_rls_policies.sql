@@ -77,6 +77,7 @@ declare
         'biometric_profiles',
         'biometric_enrollments',
         'emergency_sessions',
+        'incident_events',
         'audit_logs',
         'hospitals',
         'roles',
@@ -111,6 +112,8 @@ begin
          || '.biometric_enrollments to traya_api';
     execute 'grant update on table ' || quote_ident(target)
          || '.emergency_sessions to traya_api';
+    execute 'grant select on table ' || quote_ident(target)
+         || '.incident_events to traya_api';
 
     -- Rule 1. Revoked explicitly rather than merely omitted from `readable`, so
     -- a table that was once readable cannot stay readable across a re-run.
@@ -251,6 +254,30 @@ create policy sessions_update_own on emergency_sessions
     for update to traya_api
     using (initiator_id = traya_auth.caller_id() or traya_auth.caller_has('update_incident'))
     with check (initiator_id = traya_auth.caller_id() or traya_auth.caller_has('update_incident'));
+
+-- ---------------------------------------------------------------- incident_events
+-- The incident event log, Phase 7. An event is a fact about one incident: who was
+-- identified, by which fallback, and who then read their record.
+--
+-- Read access follows the *session*, not the subject. A responder already party
+-- to an incident needs its full event history to answer "how was this person
+-- identified?" even after the session is resolved - a reviewer reconstructing a
+-- bad match is reading a closed incident. `caller_has('view_incident')` is the
+-- broad branch and `caller_has('manage_users')` is the admin one.
+--
+-- Write is deliberately absent. Events are append-only by design: the incident
+-- log exists to be tamper-evident, and a policy that permits UPDATE or DELETE
+-- would let a caller rewrite history. There is no insert policy either, because
+-- events are written by the application connecting as table owner, not through
+-- `traya_api`; a policy without a grant is decorative. The table is SELECT-only
+-- for this role, and the application enforces append-only.
+drop policy if exists incident_events_select on incident_events;
+create policy incident_events_select on incident_events
+    for select to traya_api
+    using (
+        traya_auth.caller_has('view_incident')
+        or traya_auth.caller_has('manage_users')
+    );
 
 -- ---------------------------------------------------------------- audit
 -- Denied to everyone except a role holding `view_audit_logs`, which today is

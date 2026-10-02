@@ -12,6 +12,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    UniqueConstraint,
     Table,
     Text,
     UniqueConstraint,
@@ -319,6 +320,9 @@ class EmergencySession(Base):
     attempts: Mapped[list["IdentificationAttempt"]] = relationship(
         back_populates="session", cascade="all, delete-orphan"
     )
+    events: Mapped[list["IncidentEvent"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan", order_by="IncidentEvent.sequence"
+    )
 
 
 class IdentificationAttempt(Base):
@@ -366,6 +370,45 @@ class IdentificationCandidate(Base):
 
     attempt: Mapped[IdentificationAttempt] = relationship(back_populates="candidates")
     user: Mapped[User] = relationship(lazy="selectin")
+
+
+class IncidentEvent(Base):
+    """Append-only per-session event log.
+
+    Distinct from ``audit_logs`` and not a view over it. An audit log answers
+    "who did what to which record, and when"; this answers "what happened to
+    this person during this incident, in order" - which is the sequence a
+    responder needs when someone asks why a match was or was not made, and
+    which cannot be reassembled from audit rows because those are keyed by
+    actor, not by incident.
+
+    Never updated and never deleted. Rows are removed only by cascade from their
+    session, so a discarded incident takes its history with it.
+    """
+
+    __tablename__ = "incident_events"
+    __table_args__ = (
+        UniqueConstraint("session_id", "sequence", name="uq_incident_events_session_sequence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("emergency_sessions.id", ondelete="CASCADE"), index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(48), index=True)
+    # Monotonic within a session. Assigned by the writer, not a global sequence,
+    # so two events in the same millisecond still order deterministically.
+    sequence: Mapped[int] = mapped_column(Integer, default=0)
+    actor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    subject_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Identifies which fallback produced this event, when it was a fallback:
+    # emergency_identifier | manual_responder_entry | assisted_verification |
+    # manual_identification. None for the normal face path.
+    fallback_used: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    session: Mapped[EmergencySession] = relationship(back_populates="events")
 
 
 class Location(Base):
@@ -457,6 +500,7 @@ all_models = [
     EmergencySession,
     IdentificationAttempt,
     IdentificationCandidate,
+    IncidentEvent,
     Location,
     Hospital,
     AuditLog,

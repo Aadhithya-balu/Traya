@@ -23,6 +23,7 @@ PERMISSION_DESCRIPTIONS: dict[str, str] = {
     # --- incidents ------------------------------------------------------
     "create_incident": "Open a new incident record.",
     "update_incident": "Update incident status, notes and location.",
+    "view_incident": "Read an incident's event log: what happened and how the person was identified.",
     "view_hospitals": "Query nearby hospitals and emergency departments.",
     # --- self service ---------------------------------------------------
     "manage_own_profile": "Edit own profile, medical data and contacts.",
@@ -45,6 +46,12 @@ RESPONDER_CORE = [
     "view_emergency_contact",
     "notify_contact",
     "view_hospitals",
+    # Every responder needs the incident's own event log. It records how the
+    # person was identified and which fallback was used, which is the fact a
+    # responder at the scene must be able to see to trust the result - and it
+    # contains no clinical detail, so granting it does not widen what any role
+    # can read about the victim.
+    "view_incident",
 ]
 
 ROLE_PERMISSIONS: dict[str, list[str]] = {
@@ -71,8 +78,8 @@ ROLE_PERMISSIONS: dict[str, list[str]] = {
     + ["confirm_identity", "create_incident", "update_incident"],
     # Hospital staff: clinical alerts, but identity is not theirs to police.
     "hospital": RESPONDER_CORE + ["view_medical_alerts", "update_incident"],
-    # Auditor: read-only on the trail itself.
-    "auditor": ["view_audit_logs"],
+    # Auditor: read-only on the trail itself, and on the incident event log.
+    "auditor": ["view_audit_logs", "view_incident"],
     "admin": ALL_PERMISSIONS,
 }
 

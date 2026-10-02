@@ -24,11 +24,28 @@ from app.models import EmergencySession, IdentificationAttempt, IdentificationCa
 from app.services.identification.confidence import Thresholds, thresholds_from_settings
 from app.services.identification.engine import BiometricEngine, FaceBox, get_engine
 from app.services.identification.registry import EnrolledProfile, load_enrolled
+from app.services.incident_service import (
+    MATCH_ATTEMPTED,
+    STATUS_IDENTIFIED as INCIDENT_IDENTIFIED,
+    STATUS_IDENTIFYING as INCIDENT_IDENTIFYING,
+    STATUS_NO_MATCH as INCIDENT_NO_MATCH,
+    STATUS_REVIEW_REQUIRED as INCIDENT_REVIEW_REQUIRED,
+    record_event,
+    set_status,
+)
 
 logger = logging.getLogger("traya.identification")
 
 STATUS_NO_FACE = "NO_FACE"
 STATUS_MULTIPLE_FACES = "MULTIPLE_FACES"
+STATUS_MULTIPLE_CANDIDATES = "MULTIPLE_CANDIDATES"
+
+# How close the runner-up must be to the winner before the system refuses to
+# choose. Deliberately tight, and deliberately a margin rather than a floor: see
+# the comment at the decision site. Phase 10 must calibrate this - 0.03 is a
+# reasoned guess, not a measured value, and a real corpus is the only thing that
+# can set it honestly.
+MULTIPLE_CANDIDATES_MARGIN = 0.03
 STATUS_POOR_QUALITY = "POOR_QUALITY"
 STATUS_HIGH = "HIGH_CONFIDENCE"
 STATUS_REVIEW = "REVIEW_REQUIRED"
@@ -42,6 +59,7 @@ HUMAN_READABLE = {
     STATUS_NO_MATCH: "No reliable match found.",
     STATUS_NO_FACE: "No face detected in the image.",
     STATUS_MULTIPLE_FACES: "Multiple faces detected. Please capture one victim at a time.",
+    STATUS_MULTIPLE_CANDIDATES: "Multiple potential matches found. Please confirm manually.",
     STATUS_POOR_QUALITY: "Face quality is insufficient for reliable identification.",
 }
 
@@ -240,7 +258,27 @@ def run_identification(
                 }
             )
 
-        if best_score >= thresholds.high:
+        # `MULTIPLE_CANDIDATES` means "the system cannot discriminate between
+        # these people and must not choose". The test is the *margin between the
+        # top two*, not an absolute score floor: a candidate at 0.783 against a
+        # best of 0.995 is not a tie, it is simply a worse person. An absolute
+        # floor would label that a conflict and send a responder to disambiguate
+        # between a certain match and an unrelated one.
+        #
+        # Measured on the demo simulation: best 0.995, runner-up 0.783, a margin
+        # of 0.212 - comfortably decided. Two candidates inside
+        # MULTIPLE_CANDIDATES_MARGIN of each other and both above the review
+        # threshold is what a genuine ambiguity looks like.
+        contenders = [
+            c
+            for c in result.candidates
+            if best_score - c["confidence"] <= MULTIPLE_CANDIDATES_MARGIN
+            and c["confidence"] >= thresholds.review
+        ]
+        if len(contenders) > 1:
+            result.status = STATUS_MULTIPLE_CANDIDATES
+            requires_human_confirmation = True
+        elif best_score >= thresholds.high:
             result.status = STATUS_HIGH
             result.candidates[0]["status"] = "accepted"
         elif best_score >= thresholds.review:
@@ -305,7 +343,6 @@ def _persist_attempt(
 
     session.identification_method = result.method
     session.confidence_category = result.status
-    session.status = "completed" if result.status == STATUS_HIGH else "active"
     session.completed_at = datetime.now(UTC) if result.status == STATUS_HIGH else None
     if result.status == STATUS_HIGH and result.candidates:
         session.identified_user_id = result.candidates[0]["user_id"]
@@ -315,12 +352,57 @@ def _persist_attempt(
     elif result.status == STATUS_REVIEW:
         session.outcome = "review_required"
 
+    # The lifecycle status is owned by incident_service, not by the matcher.
+    # A pipeline that set its own status could move an incident without leaving
+    # an event, which is the exact gap the incident log exists to close.
+    #
+    # MATCH_ATTEMPTED is written *here*, before the outcome, and not by the
+    # router afterwards. The pipeline is the only place that knows the result,
+    # and an outcome logged before its attempt makes the log read backwards.
+    record_event(
+        db,
+        session,
+        MATCH_ATTEMPTED,
+        details={
+            "status": result.status,
+            "confidence": result.confidence,
+            "method": result.method,
+            "candidate_count": len(result.candidates),
+            "face_count": face_count,
+            "usable": usable,
+            "auto_accepted": result.status == STATUS_HIGH and bool(result.candidates),
+            "requires_human_confirmation": result.requires_human_confirmation,
+        },
+    )
+    if result.status == STATUS_HIGH:
+        set_status(db, session, INCIDENT_IDENTIFIED, details={"auto": True})
+    elif result.status == STATUS_MULTIPLE_CANDIDATES:
+        set_status(db, session, INCIDENT_REVIEW_REQUIRED, details={"ambiguous": True})
+    elif result.status == STATUS_NO_MATCH:
+        set_status(db, session, INCIDENT_NO_MATCH)
+    elif result.status == STATUS_REVIEW:
+        set_status(db, session, INCIDENT_REVIEW_REQUIRED)
+    else:
+        # MATCH_ATTEMPTED above is the record of this transition. Emitting the
+        # default event for `identifying` here would log the same fact twice.
+        set_status(db, session, INCIDENT_IDENTIFYING, suppress_event=True)
+
     db.commit()
     return attempt
 
 
 def confirm_candidate(db: Session, session: EmergencySession, candidate_user_id: str, confirmed_by: str, accept: bool) -> None:
-    """Level 4 human confirmation for an identification candidate."""
+    """Level 4 human confirmation for an identification candidate.
+
+    Records the responder's decision about a candidate and nothing else. It
+    deliberately does **not** move `session.status`: this wrote `completed`
+    before Phase 7, a value outside the incident vocabulary, and the caller
+    already owns the transition and writes the event beside it. Two writers of
+    one status is how the log and the row come to disagree.
+
+    Rejecting leaves the incident in `review_required` rather than closing it,
+    because a rejected candidate is a question for a human, not an answer.
+    """
     attempt = (
         db.query(IdentificationAttempt)
         .filter(IdentificationAttempt.session_id == session.id)
@@ -346,7 +428,6 @@ def confirm_candidate(db: Session, session: EmergencySession, candidate_user_id:
 
     if accept:
         session.identified_user_id = candidate_user_id
-        session.status = "completed"
         session.outcome = "identified"
         session.confidence_category = "HUMAN_CONFIRMED"
         session.completed_at = datetime.now(UTC)

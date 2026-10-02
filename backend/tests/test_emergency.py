@@ -14,7 +14,7 @@ def test_start_session(client):
     session = start_session(client)
     assert session["session_id"]
     assert session["session_code"].startswith("ER-")
-    assert session["status"] == "active"
+    assert session["status"] == "created"
     assert session["expires_at"]
     assert session["session_token"]
 
@@ -40,7 +40,7 @@ def test_session_status(client):
     assert r.status_code == 200
     body = r.json()
     assert body["session_id"] == session["session_id"]
-    assert body["status"] == "active"
+    assert body["status"] == "created"
 
 
 def test_session_not_found(client):
@@ -120,7 +120,7 @@ def test_expired_session_returns_410(client):
     past = EmergencySession(
         session_code="ER-TEST-EXPIRED",
         access_type="public",
-        status="active",
+        status="created",
         expires_at=datetime.now(UTC) - timedelta(minutes=5),
     )
     db.add(past)

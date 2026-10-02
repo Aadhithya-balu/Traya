@@ -273,6 +273,64 @@ class TimelineEventOut(BaseModel):
     details: dict[str, Any] | None = None
 
 
+class EmergencyIdentifierIn(BaseModel):
+    identifier: str = Field(min_length=3, max_length=64)
+
+
+class ManualEntryIn(BaseModel):
+    full_name: str = Field(default="", max_length=120)
+    corroborating_detail: str | None = Field(default=None, max_length=200)
+    subject_id: str | None = None
+
+
+class AssistanceRequestIn(BaseModel):
+    proposed_subject_id: str | None = None
+
+
+class AssistanceConfirmIn(BaseModel):
+    confirmed_subject_id: str
+    requested_by: str
+
+
+class UnidentifiedIn(BaseModel):
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class FallbackOut(BaseModel):
+    """What a fallback resolved to. Never carries clinical detail.
+
+    ``method`` is the fallback path name, which is also the incident log's
+    ``fallback_used`` value, so a responder and a later review agree on the
+    vocabulary.
+    """
+
+    status: str
+    method: str
+    identified: bool = True
+    subject_id: str | None = None
+    subject_name: str | None = None
+    resolved: bool = True
+    reason: str | None = None
+    awaiting_second_party: bool | None = None
+    options: list[str] = []
+
+
+class IncidentEventOut(BaseModel):
+    sequence: int
+    event_type: str
+    actor_id: str | None = None
+    subject_id: str | None = None
+    fallback_used: str | None = None
+    details: dict[str, Any] = {}
+    at: datetime
+
+
+class IncidentTimelineOut(BaseModel):
+    session_id: str
+    status: str
+    events: list[IncidentEventOut] = []
+
+
 class SessionStatusOut(BaseModel):
     session_id: str
     session_code: str

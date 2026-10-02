@@ -105,7 +105,7 @@ def test_permission_falls_back_to_matrix_when_tables_unseeded():
     "role,expected",
     [
         ("public", ["identify_person"]),
-        ("auditor", ["view_audit_logs"]),
+        ("auditor", ["view_audit_logs", "view_incident"]),
     ],
 )
 def test_minimal_roles_stay_minimal(role, expected):

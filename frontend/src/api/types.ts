@@ -102,15 +102,73 @@ reason_codes?: string[];
 export interface SessionStatus {
   session_id: string;
   session_code: string;
-  status: string;
+  status: IncidentStatus;
   access_type: string;
   outcome?: string | null;
-  identification_method: string[];
+  identification_method: IdentificationMethod[];
   confidence_category?: string | null;
   started_at: string;
   expires_at: string;
   completed_at?: string | null;
   identified_user_id?: string | null;
+}
+
+/**
+ * The incident lifecycle, mirroring `app/services/incident_service.py`.
+ *
+ * Previously the backend returned "active" and "completed" here and the
+ * frontend typed both as bare `string`, which is how rule 14's defects start:
+ * a loose type compiles through a wrong literal. These eight values are the
+ * whole set, and `backend/tests/test_frontend_contract.py` asserts the union
+ * still matches the backend.
+ *
+ * Note the vocabulary is not the old one. "active" became `created`,
+ * `identifying`, `review_required` or `no_match` depending on how far the
+ * attempt got, and "completed" became `identified` or `resolved`, because an
+ * incident that ended with nobody identified is resolved too.
+ *
+ * `expired` and `aborted` were already written by the repository before Phase 7
+ * and are kept, so all four terminal states are representable. A session that
+ * has lapsed must not be renderable as anything else.
+ */
+export type IncidentStatus =
+  | "created"
+  | "identifying"
+  | "identified"
+  | "review_required"
+  | "no_match"
+  | "assistance_in_progress"
+  | "resolved"
+  | "cancelled"
+  | "expired"
+  | "aborted";
+
+/**
+ * How an incident ended up identified, or how it was carried without an
+ * identification. The four fallback values are the paths that exist so a
+ * responder is never stuck at a dead end.
+ */
+export type IdentificationMethod =
+  | "face"
+  | "emergency_identifier"
+  | "manual_responder_entry"
+  | "assisted_verification"
+  | "manual_identification";
+
+export interface IncidentEvent {
+  sequence: number;
+  event_type: string;
+  actor_id?: string | null;
+  subject_id?: string | null;
+  fallback_used?: string | null;
+  details: Record<string, unknown>;
+  at: string;
+}
+
+export interface IncidentTimeline {
+  session_id: string;
+  status: IncidentStatus;
+  events: IncidentEvent[];
 }
 
 /** Response of POST /emergency/start. */
@@ -124,9 +182,43 @@ export interface EmergencyStartOut {
    * client and never persisted beyond the tab.
    */
   session_token: string;
-  status: string;
+  status: IncidentStatus;
   started_at: string;
   expires_at: string;
+}
+
+export interface FallbackResult {
+  status: IncidentStatus;
+  method: IdentificationMethod;
+  identified: boolean;
+  subject_id?: string | null;
+  subject_name?: string | null;
+  resolved: boolean;
+  reason?: string | null;
+  awaiting_second_party?: boolean | null;
+  options: string[];
+}
+
+/**
+ * The published thresholds and the identity of the engine that produced them.
+ *
+ * `simulated` is true when the demo engine is running, which means the
+ * thresholds belong to a brightness comparator rather than a face recogniser.
+ * `calibrated` is false until Phase 10 measures the real engine, and it is a
+ * separate flag on purpose: a real engine running on uncalibrated thresholds is
+ * the current state of this project, and one boolean cannot express that.
+ */
+export interface PublishedThresholds {
+  high_confidence: number;
+  review: number;
+  face_fallback: number;
+  /** 128 for the real engine, 320 for the simulation. Never assume either. */
+  dimension: number;
+  engine_mode: string;
+  engine_version: string;
+  simulated: boolean;
+  calibrated: boolean;
+  note: string;
 }
 
 export interface PublicSummary {

@@ -37,9 +37,56 @@ def test_high_confidence_flow(client, aarav_image):
     assert "face" in result["method"]
 
     status = client.get(f"/api/emergency/{sid}", headers=hdr).json()
-    assert status["status"] == "completed"
+    assert status["status"] == "identified"
     assert status["outcome"] == "identified"
     assert status["identified_user_id"] == aarav_id
+
+
+def test_medical_summary_requires_a_clinical_responder(client, aarav_image):
+    """A successful face match must not hand clinical data to a session token.
+
+    This is the Phase 7 security fix. Previously the endpoint ran on
+    ``_get_active_session`` alone, so anyone who could start an emergency and
+    photograph a matching face could read another person's allergies, blood
+    group and medications. A session token proves nothing about the holder.
+    """
+    session = start_session(client)
+    sid = session["session_id"]
+    identify(client, session, aarav_image)
+
+    # The session token alone is not enough, even after a high-confidence match.
+    anonymous = client.get(
+        f"/api/emergency/{sid}/medical-summary", headers=session_headers(session)
+    )
+    assert anonymous.status_code == 401
+
+    # A bystander is not a clinician.
+    registered = client.get(
+        f"/api/emergency/{sid}/medical-summary",
+        headers=make_user(client)["headers"],
+    )
+    assert registered.status_code == 403
+
+
+def test_medical_summary_denied_to_police_responder(client, aarav_image):
+    """Identification is necessary but not sufficient.
+
+    Police legitimately stand for identity and contact data. They do not get the
+    clinical history, so ``view_medical_alerts`` is what opens the endpoint -
+    not the face match.
+    """
+    session = start_session(client)
+    sid = session["session_id"]
+    identify(client, session, aarav_image)
+
+    police = auth_headers(client, "suresh.patil@responder.traya")
+    r = client.get(f"/api/emergency/{sid}/medical-summary", headers=police)
+    assert r.status_code == 403
+
+    # The same responder still gets the profile they are entitled to.
+    profile = client.get(f"/api/emergency/{sid}/responder-profile", headers=police)
+    assert profile.status_code == 200
+    assert profile.json()["full_name"] == "Aarav Kumar"
 
 
 def test_medical_summary_after_high_confidence(client, aarav_image):
@@ -47,7 +94,8 @@ def test_medical_summary_after_high_confidence(client, aarav_image):
     sid = session["session_id"]
     identify(client, session, aarav_image)
 
-    r = client.get(f"/api/emergency/{sid}/medical-summary", headers=session_headers(session))
+    headers = auth_headers(client, "neha.rao@responder.traya")
+    r = client.get(f"/api/emergency/{sid}/medical-summary", headers=headers)
     assert r.status_code == 200
     body = r.json()
     assert body["full_name"] == "Aarav Kumar"
@@ -57,11 +105,33 @@ def test_medical_summary_after_high_confidence(client, aarav_image):
     assert body["emergency_contact"]["name"] == "Sneha Kumar"
 
 
+def test_medical_access_is_written_to_the_incident_log(client, aarav_image):
+    """Reading a clinical summary is an event, not just an audit row.
+
+    The audit trail records that it happened. The incident log records who read
+    whose record, so "how was this person identified and who then looked at
+    their medical data" is answerable from the incident alone.
+    """
+    session = start_session(client)
+    sid = session["session_id"]
+    identify(client, session, aarav_image)
+    headers = auth_headers(client, "neha.rao@responder.traya")
+    client.get(f"/api/emergency/{sid}/medical-summary", headers=headers)
+
+    events = client.get(
+        f"/api/emergency/{sid}/events",
+        headers={**session_headers(session), **headers},
+    )
+    assert events.status_code == 200
+    types = [e["event_type"] for e in events.json()["events"]]
+    assert "PROFILE_ACCESSED" in types
+
+
 def test_medical_summary_gated_without_identification(client):
     session = start_session(client)
     r = client.get(
         f"/api/emergency/{session['session_id']}/medical-summary",
-        headers=session_headers(session),
+        headers=auth_headers(client, "neha.rao@responder.traya"),
     )
     assert r.status_code == 403
 
@@ -129,7 +199,7 @@ def test_confirm_by_responder_completes_session(client):
     assert r.status_code == 200
 
     status = client.get(f"/api/emergency/{session['session_id']}", headers=headers).json()
-    assert status["status"] == "completed"
+    assert status["status"] == "identified"
     assert status["outcome"] == "identified"
     assert status["confidence_category"] == "HUMAN_CONFIRMED"
     assert status["identified_user_id"] == candidate["user_id"]

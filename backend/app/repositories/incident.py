@@ -18,9 +18,35 @@ from app.models import (
     Location,
 )
 from app.repositories.base import BaseRepository
+from app.services.incident_service import (
+    INCIDENT_RESOLVED,
+    MATCH_FOUND,
+    STATUS_ABORTED,
+    STATUS_EXPIRED,
+    STATUS_IDENTIFIED,
+    STATUS_RESOLVED,
+    set_status,
+)
 
 
 class IncidentRepository(BaseRepository[EmergencySession]):
+    """Session and incident persistence.
+
+    **Nothing here writes `session.status` directly.** Every status change goes
+    through `incident_service.set_status`, even though that means a repository
+    calling a service. The alternative was a second, unlogged way to write a
+    status, and before Phase 7 that second way existed here: `complete` wrote
+    `completed`, a value the incident vocabulary does not contain and the
+    frontend union could not represent. A repository method that looks like the
+    supported path and quietly produces a status nothing else understands is
+    worse than a layering complaint, so the dependency is deliberate.
+
+    No router or service currently uses this class - the emergency API goes
+    through `incident_service` and the pipeline. It is kept because the data
+    access it wraps is real and referenced from
+    [repositories.md](../../../docs/backend/repositories.md).
+    """
+
     model = EmergencySession
 
     # ------------------------------------------------------------- sessions
@@ -39,11 +65,16 @@ class IncidentRepository(BaseRepository[EmergencySession]):
         being usable the moment it lapses rather than whenever it is next read.
         """
         session = self.db.get(EmergencySession, session_id)
-        if session is None or session.status in ("expired", "aborted"):
+        if session is None or session.status in (STATUS_EXPIRED, STATUS_ABORTED):
             return session
         if session.expires_at and datetime.now(UTC) > _as_utc(session.expires_at):
-            session.status = "expired"
-            self.db.flush()
+            set_status(
+                self.db,
+                session,
+                STATUS_EXPIRED,
+                event_type=INCIDENT_RESOLVED,
+                details={"reason": "expired_at_passed"},
+            )
         return session
 
     def recent(self, limit: int = 100) -> list[EmergencySession]:
@@ -62,23 +93,52 @@ class IncidentRepository(BaseRepository[EmergencySession]):
         confidence_category: str,
         outcome: str = "identified",
     ) -> None:
+        """Record an identification and close the incident as `identified`.
+
+        The pre-Phase-7 code wrote `completed`, which no reader understood: the
+        incident vocabulary has `identified` and `resolved` as separate
+        outcomes, because an unidentified person at a hospital entrance is not
+        a success. An `outcome` other than `identified` therefore resolves
+        rather than identifies, and says so in the log.
+        """
         session.identified_user_id = identified_user_id
         session.confidence_category = confidence_category
         session.outcome = outcome
-        session.status = "completed"
         session.completed_at = datetime.now(UTC)
+        if outcome == "identified":
+            set_status(
+                self.db,
+                session,
+                STATUS_IDENTIFIED,
+                event_type=MATCH_FOUND,
+                subject_id=identified_user_id,
+                details={"via": "IncidentRepository.complete"},
+            )
+        else:
+            set_status(
+                self.db,
+                session,
+                STATUS_RESOLVED,
+                details={"via": "IncidentRepository.complete", "outcome": outcome},
+            )
         self.db.flush()
 
     def abort(self, session: EmergencySession) -> None:
-        session.status = "aborted"
         session.outcome = "aborted"
         session.completed_at = datetime.now(UTC)
+        set_status(
+            self.db,
+            session,
+            STATUS_ABORTED,
+            event_type=INCIDENT_RESOLVED,
+            details={"reason": "aborted"},
+        )
         self.db.flush()
 
     def count_expired(self) -> int:
         return (
             self.db.query(EmergencySession)
-            .filter(EmergencySession.status == "expired")
+            .filter(EmergencySession.status == STATUS_EXPIRED)
             .count()
         )
 

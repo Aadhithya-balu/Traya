@@ -396,7 +396,7 @@ Class `PipelineResult` with `to_dict(session_id)`, which always emits
 | Function | Purpose |
 |---|---|
 | `run_identification` | The whole flow. Keyword-only: `image_bytes`, `session`, and optional `secondary_features`, `lat`, `lng`, `engine`. |
-| `confirm_candidate` | Records a human decision. Raises `ValueError` (-> 404) for a missing attempt or candidate. On accept sets `confidence_category = "HUMAN_CONFIRMED"`. |
+| `confirm_candidate` | Records a human decision. Raises `ValueError` (-> 404) for a missing attempt or candidate. On accept sets `confidence_category = "HUMAN_CONFIRMED"`. **Does not move `session.status`** - it used to write `completed`, and the router already owns that transition and writes the event beside it. |
 
 Private: `_match_features` (tier 2, text match over visible features),
 `_context_match` (tier 3, haversine to the person's home - 1.0 within 10 km,
@@ -414,18 +414,49 @@ responder to move to a better angle is useless when two people are in frame.
 
 ### Statuses and what they mean
 
-| Status | Meaning | Session |
+| Status | Meaning | Incident status |
 |---|---|---|
-| `HIGH_CONFIDENCE` | Similarity at or above 0.82. | `completed`, `identified_user_id` set. |
-| `REVIEW_REQUIRED` | 0.62 to 0.82. A human must confirm. | stays `active`. |
-| `LOW_CONFIDENCE` | Below 0.62 but a candidate exists. | stays `active`. |
-| `NO_MATCH` | Nothing above the fallback threshold. | stays `active`. |
-| `NO_FACE` / `MULTIPLE_FACES` / `POOR_QUALITY` | Retake the photo. | stays `active`. |
+| `HIGH_CONFIDENCE` | Similarity at or above 0.82. | `identified`, `identified_user_id` set. |
+| `MULTIPLE_CANDIDATES` | **Phase 7.** Two or more candidates within `MULTIPLE_CANDIDATES_MARGIN` of each other and above the review threshold. The system must not choose. | `review_required`. |
+| `REVIEW_REQUIRED` | 0.62 to 0.82. A human must confirm. | `review_required`. |
+| `LOW_CONFIDENCE` | Below 0.62 but a candidate exists. | `identifying`. |
+| `NO_MATCH` | Nothing above the fallback threshold. | `no_match`. |
+| `NO_FACE` / `MULTIPLE_FACES` / `POOR_QUALITY` | Retake the photo. | `identifying`. |
 
-The session is marked `completed` **only** on `HIGH_CONFIDENCE` or a human
-confirmation, and `identified_user_id` is auto-set **only** on
-`HIGH_CONFIDENCE`. That is what keeps the medical summary gated behind a real
-match.
+`identified_user_id` is auto-set **only** on `HIGH_CONFIDENCE`. That is what
+keeps the clinical record gated behind a real match.
+
+**The pipeline no longer writes `session.status` itself.** Phase 7 moved every
+transition through `incident_service.set_status`, so the status field and the
+event that explains it are written together. A matcher that set its own status
+could move an incident without leaving a trace, which is the exact gap the
+incident log exists to close.
+
+It does own the *events* for an attempt, deliberately. `_persist_attempt` writes
+`MATCH_ATTEMPTED` and then the outcome, in that order, because it is the only
+place that knows the result. The router previously wrote `MATCH_ATTEMPTED` itself
+afterwards, which put `MATCH_FOUND` ahead of its own attempt in a log ordered by
+`sequence` - and re-sorting cannot repair an event appended in the wrong order.
+
+One consequence worth stating: `LOW_CONFIDENCE`, `NO_FACE`, `MULTIPLE_FACES` and
+`POOR_QUALITY` all land on `identifying`, which has no default event, so the
+pipeline passes `suppress_event=True` rather than inventing a second attempt row.
+See [identifying has no default event](#identifying-has-no-default-event-on-purpose).
+
+### `MULTIPLE_CANDIDATES` is a margin, not a floor
+
+`MULTIPLE_CANDIDATES_MARGIN = 0.03` and the test is `best_score -
+candidate.confidence <= MARGIN` **plus** `candidate.confidence >=
+review`. An absolute score floor would be wrong in a way that only shows up on
+real data: a candidate at 0.783 against a best of 0.995 is not a tie, it is a
+different person, and calling that ambiguity would send a responder to
+disambiguate between a certain match and an unrelated one.
+
+Measured on the demo simulation: best 0.995, runner-up 0.783 - a margin of
+0.212, comfortably decided. The demo data **cannot** exercise this branch, so
+`test_multiple_candidates_is_reported_not_guessed` stubs the scorer, and says so
+in its own docstring. The 0.03 is a reasoned guess and is **uncalibrated**;
+Phase 10 has to measure how often a real tie occurs before it can be trusted.
 
 `fallback_used` is set when the best similarity is below
 `face_fallback + 0.08` **and** a non-face method contributed, so a UI can warn
@@ -433,6 +464,113 @@ that a weak result leaned on context rather than the face.
 
 `MAX_CANDIDATES = 3`; `HUMAN_READABLE` maps each status to responder-facing
 prose.
+
+---
+
+## Incident lifecycle - `app/services/incident_service.py`
+
+**Phase 7.** Owns the ten incident statuses and the append-only event log.
+
+| Name | Purpose |
+|---|---|
+| `record_event` | Appends one event. Never commits, never mutates anything else. Raises `UnknownEventType` outside `EVENT_TYPES` and `ValueError` on an unknown `fallback_used`. |
+| `set_status` | **The only sanctioned way to change `session.status`.** Derives the event type from the status via `STATUS_EVENTS`, or takes an explicit override. Raises if the status has no default event and none was given; resolves the event *before* touching the status, so a refused transition leaves the session unchanged. |
+| `next_sequence` | `MAX(sequence) + 1` inside the caller's transaction. |
+| `timeline` | Read-only, ordered by `sequence`. |
+
+### Why `set_status` exists
+
+A status reached without an event is exactly the gap that makes an incident
+unexplainable, so the two are written together and cannot disagree. Before Phase 7
+the pipeline assigned `session.status` directly in three places and the
+repository in two more.
+
+`STATUS_EVENTS` maps one honest event per status. `REVIEW_REQUIRED` and
+`NO_MATCH` **share** `MATCH_REJECTED` deliberately: a human declining to accept an
+automatic result and a system finding nothing are the same fact from the
+incident's point of view - nothing was identified automatically and a person has
+to decide what happens next.
+
+`TERMINAL_STATUSES` is `resolved`, `cancelled`, `expired`, `aborted`. The last two
+were already written by `IncidentRepository` before Phase 7 and are kept, which
+is why the vocabulary is ten values rather than eight.
+
+### `identifying` has no default event, on purpose
+
+`STATUS_EVENTS` has **nine** entries for **ten** statuses. `identifying` is the
+missing one, and the omission was found by a test rather than by reading: with a
+default in place, every photograph ever taken wrote a `MATCH_ATTEMPTED` row
+*before* the `FACE_CAPTURE_STARTED` that caused it. A responder opening the camera
+has attempted no match, and a log that claims otherwise is worse than no log.
+
+Two callers enter this status and both now name their own event. `/capture`
+passes `event_type=FACE_CAPTURE_STARTED` when it moves the session, and records
+the event directly when it does not, so a re-capture inside an already-identifying
+incident is still recorded as a capture rather than as a second attempt. The
+pipeline passes `suppress_event=True`, because it has just written the
+`MATCH_ATTEMPTED` that explains the move. `suppress_event` exists only for that
+case and returns `None`; it is not a general "log nothing" switch.
+
+A caller that enters `identifying` without an event gets a `ValueError` naming
+the status, and the session is left exactly as it was.
+`test_entering_identifying_refuses_to_invent_an_event` holds both halves of that.
+
+### `MATCH_ATTEMPTED` belongs to the pipeline, not the router
+
+`POST /{id}/identify` used to record `MATCH_ATTEMPTED` after calling the
+pipeline, which meant the outcome row the pipeline had already written landed
+*first*. The log read `MATCH_FOUND` → `MATCH_ATTEMPTED`, which is the backwards
+version of the story, and ordering by `sequence` cannot repair an event that was
+appended in the wrong order. The pipeline is the only place that knows the
+result, so it writes both, in that order, and the router writes only the audit
+row. `test_the_biometric_journey_writes_the_expected_narrative` asserts the full
+six-event sequence for a matched capture exactly, because presence alone would not
+have caught either half of this.
+
+### Concurrency is not solved here
+
+`next_sequence` reads `MAX + 1`, which two concurrent responders can race. The
+`(session_id, sequence)` unique constraint is what actually stops a duplicate -
+the service cannot make that safe on its own, and the migration comment says so.
+Two sessions inserting into one incident simultaneously will produce an
+`IntegrityError`, not a corrupt log. Fixing this properly means a
+per-session lock or a sequence table, and is not Phase 7.
+
+## Fallback paths - `app/services/fallback_service.py`
+
+`app/services/fallback_service.py`. Phase 7. The four ways an incident gets
+identified without a confident face match.
+
+### Fallback paths
+
+Four paths, each answering a different question, so a responder is never at a
+dead end.
+
+| Function | Path | Rule that makes it worth having |
+|---|---|---|
+| `identify_by_emergency_identifier` | `emergency_identifier` | Resolves a contact phone. **Not a name search** - matching a name against every user would make this an enumeration primitive. A failed resolution writes an event and 404s; it never invents an identity. |
+| `identify_manually` | `manual_responder_entry` | A name-only match **requires** a corroborating detail. More than one match is a question, not a coin flip. Sets `MANUAL_CONFIRMED`, never `HUMAN_CONFIRMED`. |
+| `request_assistance` / `complete_assistance` | `assisted_verification` | The proposed subject cannot be the requester; **the confirmer must not be the requester**. Either rule missing collapses "a bystander confirms the person they are looking at" into "the responder confirms the person they are looking at". |
+| `continue_unidentified` | `manual_identification` | Resolves with `outcome="unidentified"` and `MANUAL_UNIDENTIFIED`. Exists so "we do not know who this is" is a supported outcome - a system that cannot record it will either refuse to help or invent an identity. |
+
+None trusts the responder's word: each resolves through the database and records
+what it resolved to. `FallbackOutcome` never carries clinical detail.
+
+`FallbackError` is a `ValueError` subclass carrying a message safe to show a
+responder, and each router turns it into a 404 (nothing resolved) or a 400 (the
+request itself is wrong, as in self-confirmation). The distinction matters: 404
+means "look again", 400 means "that cannot be done".
+
+All four are asserted reachable by `test_every_fallback_path_is_reachable`,
+which is a guard against a path being added to the vocabulary but never wired.
+The twelve **event** types are held to the same standard by
+`test_every_declared_event_type_is_reachable_through_the_api`, which drives real
+journeys and compares what was written against `EVENT_TYPES`. That test is what
+caught two defects a unit test could not: `CONTACT_INITIATED` was reachable only
+through a fallback, so `POST /{id}/contact` - the action a responder actually
+takes - left no trace in the incident log beyond the audit trail, and
+`MATCH_REJECTED` was emitted only when a human rejected a candidate, never when
+the engine simply found nothing.
 
 ---
 

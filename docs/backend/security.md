@@ -61,6 +61,7 @@ Eighteen permissions, defined in `PERMISSION_DESCRIPTIONS`
 | `notify_contact` | Trigger an emergency-contact notification. |
 | `create_incident` | Open a new incident record. |
 | `update_incident` | Update incident status, notes and location. |
+| `view_incident` | Read an incident's event log: what happened and how the person was identified. |
 | `view_hospitals` | Query nearby hospitals and emergency departments. |
 | `manage_own_profile` | Edit own profile, medical data and contacts. |
 | `enroll_biometric` | Submit and re-enroll own face samples. |
@@ -84,11 +85,17 @@ responder roles.
 | `medical_responder` | `RESPONDER_CORE` + `confirm_identity`, `view_medical_alerts`, `create_incident`, `update_incident` |
 | `police_responder` | `RESPONDER_CORE` + `confirm_identity`, `create_incident`, `update_incident` - **no** `view_medical_alerts` |
 | `hospital` | `RESPONDER_CORE` + `view_medical_alerts`, `update_incident` - **no** `confirm_identity` |
-| `auditor` | `view_audit_logs` only |
-| `admin` | All 18 |
+| `auditor` | `view_audit_logs`, `view_incident` |
+| `admin` | All 19 |
 
 The deliberate asymmetries: police cannot see medical alerts, hospitals cannot
-confirm identity, auditors can read nothing but the audit trail.
+confirm identity, auditors cannot read a victim's records.
+
+**`view_incident` is in `RESPONDER_CORE`** (Phase 7), so every responder role and
+the auditor hold it. That is safe because the incident event log carries no
+clinical detail - only which fallback was used and who acted. It is what lets a
+responder at the scene answer "how was this person identified?" without also
+being able to read the victim's medical record.
 
 ### Database is authoritative, static matrix is the fallback
 
@@ -119,8 +126,8 @@ permissions, since they are finer-grained and database-backed.
 
 These are in the catalogue, granted to roles, and returned by
 `GET /api/auth/permissions`, but **no endpoint checks them**:
-`view_identity`, `view_medical_alerts`, `view_emergency_contact`,
-`notify_contact`, `view_hospitals`, `create_incident`, `update_incident`.
+`view_identity`, `view_emergency_contact`, `notify_contact`, `view_hospitals`,
+`create_incident`, `update_incident`, `view_incident`.
 
 Two consequences. `GET /api/hospitals/nearby` is public because `view_hospitals`
 is unchecked, which is intentional for emergency routing. And
@@ -128,6 +135,33 @@ is unchecked, which is intentional for emergency routing. And
 create/update is modelled but not reachable. Do not read the matrix as a
 description of what is currently enforced; read
 [api.md](api.md#read-the-auth-column) for that.
+
+### `view_medical_alerts` is checked, and Phase 7 found it was not
+
+`view_medical_alerts` **was** in that unchecked list before Phase 7, and the
+consequence was a live disclosure:
+
+```
+GET /api/emergency/{session_id}/medical-summary   session
+```
+
+authorized on `_get_active_session` alone, which accepts the public session
+token. So anyone who could start an emergency and photograph a face that matched
+could read that person's blood group, allergies, conditions and medications. The
+endpoint now declares `require_permission("view_medical_alerts")`.
+
+Three tests in `tests/test_identification.py` and
+`tests/test_incident.py` exist specifically to hold it: the session token alone
+is 401, a registered bystander is 403, and **a police responder is 403** - which
+is the assertion that encodes the actual rule. An identification is necessary but
+not sufficient; the role matrix, not the face match, is what opens the clinical
+record. Police get `/responder-profile` instead, which is what they are there
+for.
+
+The same pattern is why every fallback endpoint requires
+`require_permission("identify_person")` **and** the session: a bystander's
+session token must not be enough to identify anyone or to record an incident as
+unidentified.
 
 ## Password hashing
 

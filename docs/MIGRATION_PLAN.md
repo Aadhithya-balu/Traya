@@ -773,6 +773,62 @@ step 10 (the `MULTIPLE_CANDIDATES` margin rule) remains undone.
 
 Medium.
 
+### Outcome — Phase 7 complete, and the gate found four defects
+
+All six items are implemented, and the gate's first line turned out to be the
+one worth writing the test for. `test_every_declared_event_type_is_reachable_through_the_api`
+drives real HTTP journeys and compares what was written against `EVENT_TYPES`. It
+failed on the first run, which is the outcome worth having: a vocabulary entry
+that is well-formed but never emitted is invisible to every other kind of test.
+
+**Four defects, all found by that test rather than by reading.**
+
+1. **`MATCH_ATTEMPTED` was logged before its own attempt.** `_persist_attempt`
+   wrote the outcome (`MATCH_FOUND`) and committed, and the router then recorded
+   `MATCH_ATTEMPTED` afterwards. The log read `MATCH_FOUND` → `MATCH_ATTEMPTED`.
+   Ordering by `sequence` cannot repair an event appended in the wrong order, so
+   the fix moved `MATCH_ATTEMPTED` into the pipeline, which is the only place
+   that knows the result.
+2. **Every photograph claimed a match attempt.** `STATUS_EVENTS` mapped
+   `identifying` → `MATCH_ATTEMPTED`, so opening the camera wrote an attempt row
+   *before* the `FACE_CAPTURE_STARTED` that caused it. A responder taking a photo
+   has attempted nothing. `identifying` now has **no** default event and
+   `set_status` raises rather than inventing one; both callers name their own.
+3. **`CONTACT_INITIATED` was unreachable from the action it describes.** The
+   fallback path emitted it, so the vocabulary was covered and the responder's
+   actual `POST /{id}/contact` wrote only an audit row. It now records
+   `channel: "responder_reported"`, because the responder is reporting that they
+   made contact, not performing it.
+4. **One human decision wrote two events.** `confirm` called `record_event` and
+   then `set_status` with the same type, so `MATCH_FOUND` and `MATCH_REJECTED`
+   were each written twice per confirmation.
+
+A fifth came from reading rather than testing, and is the reason
+`test_incident_repository.py` exists: `IncidentRepository.complete` wrote
+`status = "completed"`, which is **not in the vocabulary at all**. No router
+calls that method, so nothing failed and nothing would have — until someone wired
+it in. `incident.py` now imports `set_status`, which inverts the usual layering
+and is commented as the deliberate fix. `confirm_candidate` had the same defect
+and now leaves the transition to its caller.
+
+### The one thing Phase 7 did not fix
+
+**Legacy rows are not migrated.** `completed` and `active` remain in any table
+written before this phase, no code reads either value, and the frontend union
+cannot represent them. This is documented in
+[repositories.md](backend/repositories.md#legacy-rows-are-not-migrated) rather
+than papered over. A deployment with real pre-Phase-7 sessions needs a data
+migration before the UI can render them, and that belongs to Phase 12.
+
+### What is not claimed
+
+`MULTIPLE_CANDIDATES_MARGIN` (0.03) is still a reasoned guess. The four fallback
+paths are asserted reachable and auditable by contract, but **no human has run
+one**: not a responder with a wristband, not a bystander confirming an assisted
+verification. The React UI for the fallbacks does not exist yet, so every path in
+this phase is server-side and reachable by `curl` and by test — nothing more.
+Phase 9 builds the screen.
+
 ## Phase 8 - Auth preservation test
 
 **Depends on** Phase 7. Small, and the prompt's explicit Phase 8.

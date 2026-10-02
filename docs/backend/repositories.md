@@ -126,10 +126,10 @@ but nothing calls these - so treat it as modelled-but-unused.
 | Method | Behaviour |
 |---|---|
 | `start` | Creates a session with a `session_code` and `expires_at`. |
-| `get_active` | Returns the session unless `expired`/`aborted`; **persists** `status="expired"` on a lapsed session. |
+| `get_active` | Returns the session unless `expired`/`aborted`; **persists** `status="expired"` on a lapsed session, via `set_status`, so the expiry is an event and not a silent column change. |
 | `recent` | Newest first. |
-| `complete` | Sets `identified_user_id`, `confidence_category`, `outcome`, `completed_at`. |
-| `abort` | Marks the session aborted. |
+| `complete` | Sets `identified_user_id`, `confidence_category`, `outcome`, `completed_at`, then moves the incident to `identified` - or to `resolved` when `outcome` is anything else. |
+| `abort` | Moves the incident to `aborted` and writes `INCIDENT_RESOLVED`. |
 | `count_expired` | Expired-session count. |
 | `add_location` | Inserts a `Location` with `source` (`gps` or `manual`). |
 | `record_attempt` | Inserts an `IdentificationAttempt` with the quality scores. |
@@ -143,6 +143,32 @@ but nothing calls these - so treat it as modelled-but-unused.
 that has passed `expires_at` must stop being treated as active everywhere,
 including in reports, and one place is more reliable than a check at every call
 site.
+
+### This repository imports a service, and that is the point
+
+`incident.py` imports `set_status` from `app.services.incident_service`, which inverts
+the usual direction and will read as a mistake to anyone who assumes the rule is
+mechanical. It is the fix for a real defect. `complete` used to write
+`status = "completed"` directly: a value that is **not in `INCIDENT_STATUSES`**, not in
+the frontend `IncidentStatus` union, and not readable as any outcome at all. The
+emergency API never calls this method, so nothing failed and nothing noticed - the
+row would have been written the first time someone wired the repository in.
+
+A second, unlogged way to write a status is the exact failure `incident_service`
+was introduced to prevent, and it is worse here than a layering complaint
+because the method *looks* like the supported path.
+`tests/test_incident_repository.py` asserts that every status this repository can
+write is in the vocabulary, that `complete` never writes `completed`, and that
+each of these methods leaves an event behind.
+
+### Legacy rows are not migrated
+
+Rows written before Phase 7 still hold `completed` or `active`. No migration
+rewrites them and no code reads either value, so a pre-Phase-7 session reports a
+status outside the vocabulary and outside the frontend union. This is stated in
+[services.md](services.md) and is **not** silently handled - if the deployment has
+real pre-Phase-7 sessions, they need a data migration before the UI can display
+them, and that is Phase 12 work rather than something to paper over here.
 
 ---
 

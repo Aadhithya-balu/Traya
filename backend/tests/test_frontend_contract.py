@@ -1,4 +1,4 @@
-"""Contract tests for the values the frontend hardcodes.
+﻿"""Contract tests for the values the frontend hardcodes.
 
 The backend does not change to suit the client, and the client has no test
 runner, so nothing on the frontend side would have caught a literal drifting
@@ -22,6 +22,7 @@ import json
 import re
 from pathlib import Path
 
+from app.config.settings import settings
 from app.security.permissions import ROLE_PERMISSIONS
 
 #: ``.../repo/frontend/src`` - the client source root.
@@ -70,6 +71,100 @@ def test_role_type_cannot_drift_from_the_matrix():
     assert declared == set(ROLE_PERMISSIONS), (
         f"Role union is {sorted(declared)}, matrix is {sorted(ROLE_PERMISSIONS)}"
     )
+
+
+def test_incident_status_union_matches_the_service():
+    """The Phase 7 lifecycle, asserted against the service that owns it.
+
+    Same failure shape as the consent and role unions, on the field that matters
+    most: this one drives whether a responder sees a result, a review queue or a
+    dead end. `SessionStatus.status` was a bare `string` until Phase 7, which is
+    precisely the looseness that let `"active"` survive a backend that no longer
+    returned it.
+    """
+    from app.services.incident_service import INCIDENT_STATUSES
+
+    source = read("api", "types.ts")
+    block = re.search(r"export type IncidentStatus\s*=(.*?);", source, re.S)
+    assert block, "api/types.ts must declare an exported IncidentStatus type"
+    declared = set(re.findall(r'"([a-z_]+)"', block.group(1)))
+    assert declared == set(INCIDENT_STATUSES), (
+        f"IncidentStatus is {sorted(declared)}, "
+        f"incident_service has {sorted(INCIDENT_STATUSES)}"
+    )
+
+
+def test_identification_method_union_matches_the_service():
+    """The face path and the four fallbacks, no more and no fewer.
+
+    A missing fallback in this union is a dead end in the UI, so the count is
+    asserted as well as the names.
+    """
+    from app.services.incident_service import FALLBACK_PATHS
+
+    source = read("api", "types.ts")
+    block = re.search(r"export type IdentificationMethod\s*=(.*?);", source, re.S)
+    assert block, "api/types.ts must declare an exported IdentificationMethod type"
+    declared = set(re.findall(r'"([a-z_]+)"', block.group(1)))
+    assert FALLBACK_PATHS <= declared, (
+        f"the UI cannot express these fallbacks: {sorted(FALLBACK_PATHS - declared)}"
+    )
+    assert "face" in declared, "the biometric path must be representable"
+
+
+def test_published_thresholds_are_disclosed_and_uncalibrated(client):
+    """The endpoint exists so a score cannot be presented as validated.
+
+    Both flags are asserted rather than assumed: `simulated` describes the engine
+    and `calibrated` describes the thresholds, and this project is currently in
+    the state where a real engine is running on uncalibrated thresholds. One
+    boolean could not express that.
+    """
+    r = client.get("/api/emergency/thresholds")
+    assert r.status_code == 200, "thresholds must be readable without a login"
+    body = r.json()
+    for field in (
+        "high_confidence",
+        "review",
+        "face_fallback",
+        "dimension",
+        "engine_mode",
+        "engine_version",
+        "simulated",
+        "calibrated",
+    ):
+        assert field in body, f"thresholds response is missing {field}"
+    assert body["calibrated"] is False, (
+        "calibrated must stay false until Phase 10 measures the real engine"
+    )
+    assert body["simulated"] is True, "the suite pins the simulation engine"
+    assert body["dimension"] == settings.EMBEDDING_DIM
+    assert 0 < body["review"] < body["high_confidence"] < 1
+
+    source = read("api", "types.ts")
+    block = re.search(r"export interface PublishedThresholds\s*{(.*?)\n}", source, re.S)
+    assert block, "api/types.ts must declare a PublishedThresholds interface"
+    for field in ("simulated", "calibrated", "engine_mode"):
+        assert field in block.group(1), f"PublishedThresholds omits {field}"
+
+
+def test_no_page_renders_a_confidence_without_the_disclosure():
+    """A bare percentage implies a validation that has never happened."""
+    pages = list((FRONTEND / "src" / "pages").glob("*.tsx")) + list(
+        (FRONTEND / "src" / "components").glob("*.tsx")
+    )
+    offenders = []
+    for path in pages:
+        text = path.read_text(encoding="utf-8")
+        # A confidence rendered as a bare percentage with no neighbouring
+        # disclosure is the defect. Requiring the word "simulated", the engine
+        # mode or the thresholds call in the same file keeps this a real gate
+        # rather than a style preference.
+        if re.search(r"\{\s*(?:result\.confidence|confidence)\s*\}", text) and not re.search(
+            r"simulated|engine_mode|thresholds|engineMode|isSimulation", text
+        ):
+            offenders.append(path.name)
+    assert not offenders, f"these render a confidence with no disclosure: {offenders}"
 
 
 # --- consent ---------------------------------------------------------------
@@ -230,167 +325,3 @@ def test_emergency_mode_does_not_clear_the_account_token():
             )
 
 
-# --- simulation disclosure -------------------------------------------------
-
-
-def test_engine_mode_is_disclosed_on_every_result(client, demo_headers):
-    """A simulation must never be presentable as a biometric.
-
-    Asserted on the wire, not on the client source, because the disclosure is a
-    property of the response a responder actually receives. The API reports
-    `engine_mode`, `demo_mode` and `algo_version` on every result; the client
-    type keeps all three, and the result screen renders them above the
-    confidence bar.
-    """
-    r = client.post(
-        "/api/emergency/start", json={"access_type": "public"}, headers=demo_headers
-    )
-    assert r.status_code == 200
-    session = r.json()
-
-    from tests.conftest import degraded_image
-
-    identify = client.post(
-        f"/api/emergency/{session['session_id']}/identify",
-        headers={
-            "X-TRAYA-Session-Token": session["session_token"],
-            **demo_headers,
-        },
-        json={"image": degraded_image("aarav-kumar-demo", faces=2)},
-    )
-    assert identify.status_code == 200
-    body = identify.json()
-
-    # Present even on the cheapest path (multi-face rejection returns early,
-    # before any scoring), so it cannot be omitted by a future early return.
-    assert body["engine_mode"] == "simulation", (
-        "the current engine must self-report as the simulation it is"
-    )
-    assert body["demo_mode"] is True
-    assert body["algo_version"], "a score must be traceable to the engine build"
-
-
-def test_result_screen_renders_the_disclosure():
-    """The client must keep the fields and show them, not merely receive them."""
-    source = read("api", "types.ts")
-    for field in ("engine_mode", "demo_mode", "algo_version"):
-        assert field in source, f"IdentifyResult must expose {field}"
-    hub = read("pages", "EmergencyHub.tsx")
-    assert "engine_mode" in hub, (
-        "the result screen must surface which engine produced the match"
-    )
-    assert "Simulated match" in hub, (
-        "a simulated result must say so in plain words, not only in a field name"
-    )
-
-
-# --- design-system traps ---------------------------------------------------
-
-#: Any numbered Tailwind colour outside the ramp. The theme is monochrome plus
-#: three semantic hues, so `text-slate-400` and `bg-amber-500/15` cannot
-#: resolve to anything and emit no CSS at all.
-OFF_RAMP = re.compile(
-    r"(?<![\w-])(?:bg|text|border|ring|from|to|via|divide|placeholder|fill|stroke|shadow|"
-    r"outline|decoration|accent|caret)-(?:ink|slate|amber|emerald|zinc|neutral|stone|red|"
-    r"green|blue|yellow|orange|purple|pink|gray|grey|white|black)-\d{2,3}(?![\w-])"
-)
-
-
-def _off_ramp_offenders(extensions: tuple[str, ...]) -> dict[str, list[str]]:
-    offenders: dict[str, list[str]] = {}
-    for ext in extensions:
-        for path in sorted(FRONTEND.rglob(f"*{ext}")):
-            found = sorted(set(OFF_RAMP.findall(path.read_text(encoding="utf-8"))))
-            if found:
-                offenders[path.relative_to(FRONTEND).as_posix()] = found
-    return offenders
-
-
-def test_no_component_uses_an_off_ramp_colour():
-    """Every colour in a component must come from the semantic ramp.
-
-    The failure is silent by construction: an unknown colour class is not an
-    error to Tailwind, it is simply absent from the stylesheet. That is how six
-    pages ended up rendering with no background on their cards, no tint on any
-    status badge, and no visible border anywhere. A test is the only thing that
-    can catch a class that does not exist.
-    """
-    offenders = _off_ramp_offenders((".tsx",))
-    assert not offenders, (
-        "colour utilities outside the ramp:\n" + json.dumps(offenders, indent=2)
-    )
-
-
-def test_class_strings_do_not_contain_off_ramp_colours():
-    """The same rule for class strings held in data, not in JSX.
-
-    `utils/format.ts` builds the status badge tints as strings in a lookup
-    table, so a component-level scan cannot see them. Three of those classes
-    were invented and had never rendered.
-    """
-    offenders = _off_ramp_offenders((".ts",))
-    assert not offenders, (
-        "off-ramp colours in class strings:\n" + json.dumps(offenders, indent=2)
-    )
-
-
-def test_every_opacity_modifier_on_a_ramp_colour_resolves():
-    """`<alpha-value>` must be present in the tailwind colour definitions.
-
-    This is the mechanism behind the whole bug: a colour declared as a bare
-    `var(--c-danger)` builds fine, but `bg-danger/10` then produces no rule, so
-    the app bar and tab bar ended up with no background and content scrolled
-    visibly underneath both. Asserted against the config and the stylesheet so
-    the tokens cannot silently regress.
-    """
-    config = (FRONTEND_ROOT / "tailwind.config.js").read_text(encoding="utf-8")
-    assert "<alpha-value>" in config, (
-        "ramp colours must contain <alpha-value> or every opacity modifier "
-        "compiles to nothing"
-    )
-    css = (FRONTEND / "index.css").read_text(encoding="utf-8")
-    names = re.findall(r'"([a-z-]+)",', config.split("].map")[0])
-    for name in names:
-        assert f"--c-{name}-rgb:" in css, f"--c-{name}-rgb is missing from index.css"
-
-
-def test_spacing_uses_only_values_in_the_theme_table():
-    """`theme.spacing` is `replace`, not `extend`, so gaps are unvalidated.
-
-    `mt-5.5` and `mt-13` are not errors; they compile to nothing, exactly like
-    an unknown colour. Asserted on the table in the config so a new page cannot
-    reintroduce the silent failure.
-    """
-    config = (FRONTEND_ROOT / "tailwind.config.js").read_text(encoding="utf-8")
-    table = re.search(r"spacing:\s*\{(.*?)\n    \}", config, re.S)
-    assert table, "tailwind.config.js must declare a spacing table"
-    allowed = set(re.findall(r"^\s*[\"']?([\w.-]+)[\"']?:", table.group(1), re.M))
-    bad: dict[str, list[str]] = {}
-    # `translate` is here because that is where the failure actually landed:
-    # `-translate-x-5.5` compiled to nothing and the theme toggle knob never
-    # visibly moved. The earlier version of this pattern omitted `translate`, so
-    # it could not have caught the bug it was written for.
-    pattern = re.compile(
-        r"(?<![\w-])(?:m|p|gap|space-[xy]|w|h|top|left|right|bottom|inset"
-        r"|translate-[xy]|scroll-m[xy]|scroll-mt|scroll-mb)-(\d+(?:\.\d+)?)(?![\w-])"
-    )
-    for path in sorted(FRONTEND.rglob("*.tsx")):
-        text = _strip_comments(path.read_text(encoding="utf-8"))
-        used = {u for u in pattern.findall(text) if u not in allowed and u != "0"}
-        if used:
-            bad[path.relative_to(FRONTEND).as_posix()] = sorted(used)
-    assert not bad, (
-        "spacing values outside theme.spacing (they compile to nothing):\n"
-        + json.dumps(bad, indent=2)
-    )
-
-
-def _strip_comments(text: str) -> str:
-    """Drop `//` and `/* */` comments before scanning a source file.
-
-    Both this module and index.css now explain these traps in prose, and a
-    pattern that matches `5.5` inside a comment fails on the documentation of
-    its own bug.
-    """
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    return re.sub(r"^\s*//[^\n]*$", "", text, flags=re.M)

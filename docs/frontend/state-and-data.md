@@ -265,7 +265,29 @@ Paths are relative to `/api`.
 `medicalSummary` GET `/emergency/{id}/medical-summary`, `responderProfile` GET
 `/emergency/{id}/responder-profile`, `contactAction` POST `/emergency/{id}/contact`,
 `sendLocation` POST `/emergency/{id}/location`, `timeline` GET
-`/emergency/{id}/timeline`.
+`/emergency/{id}/timeline`, `incidentEvents` GET `/emergency/{id}/events`,
+`thresholds` GET `/emergency/thresholds`.
+
+**Fallback** (Phase 7) - `fallbackByIdentifier` POST
+`/emergency/{id}/fallback/emergency-identifier`, `fallbackManualEntry` POST
+`/emergency/{id}/fallback/manual-entry`, `fallbackRequestAssistance` POST
+`/emergency/{id}/fallback/assistance`, `fallbackConfirmAssistance` POST
+`/emergency/{id}/fallback/assistance/confirm`, `fallbackUnidentified` POST
+`/emergency/{id}/fallback/unidentified`.
+
+Two of these are wired and must not be conflated. `timeline` is the **audit
+trail** (`audit_logs`), readable with the session token and useful with
+`view_audit_logs`; `incidentEvents` is the **operational record**
+(`incident_events`), also readable with the session token and answering "how was
+this person identified?". `thresholds` is the third distinct thing: unauthenticated,
+no user data, and it exists so a confidence score cannot be rendered as validated.
+
+Every fallback method requires an authenticated responder *and* the session token.
+A caller must handle **403 as a normal outcome**, not an error - a police
+responder is a legitimate caller of `medicalSummary` who will be refused it and
+routed to `responderProfile` instead. `fallbackUnidentified` returning success is
+not a failure of the call: it is the system recording that nobody was identified,
+which is a supported result and the reason the method exists.
 
 **Hospitals** - `nearbyHospitals` GET `/hospitals/nearby`.
 
@@ -357,10 +379,42 @@ every other PATCH. That is a backend inconsistency, not a client choice.
 | `AuditLog` | One audit row. |
 | `Setting` | Key, value, description. |
 | `HospitalAdmin` | Full hospital record for the admin console. |
+| `IncidentEvent` | One incident log entry: `sequence`, `event_type`, `actor_id`, `subject_id`, `fallback_used`, `details`, `at`. Carries **no clinical detail**, which is what makes it safe for every responder role to read. |
+| `IncidentTimeline` | `{ session_id, status, events }`. Ordered by `sequence`, not `at`. |
+| `FallbackResult` | What a fallback resolved to: `method`, `identified`, `resolved`, optional `subject_name`, `awaiting_second_party`, `reason`. `identified: false` with `resolved: true` is the unidentified path working, not an error. |
+| `PublishedThresholds` | `high_confidence`, `review`, `face_fallback`, `dimension`, `engine_mode`, `engine_version`, **`simulated`**, **`calibrated`**, `note`. |
+
+### `IncidentStatus` and `IdentificationMethod`
+
+Two unions added in Phase 7, and they replace a bare `string` on the field that
+matters most.
+
+`SessionStatus.status` was typed `string`, which is the fourth instance of the
+defect below and the most consequential: it is what decides whether a responder
+sees a result, a review queue, or a dead end. It is now `IncidentStatus` - the ten
+values in `app/services/incident_service.py`, asserted equal to that set by
+`test_incident_status_union_matches_the_service`. The vocabulary changed with it:
+`active` became `created` / `identifying` / `review_required` / `no_match`
+depending on how far the attempt got, and `completed` became `identified` or
+`resolved`, because an unidentified person at a hospital entrance is not a
+success. `expired` and `aborted` were already written by the repository and are
+kept, so all four terminal states are representable.
+
+`IdentificationMethod` is `face` plus the four fallback paths.
+`test_identification_method_union_matches_the_service` asserts the four are all
+present, because **a missing fallback in this union is a dead end in the UI** -
+the backend can offer a path the frontend cannot express.
+
+`PublishedThresholds.simulated` and `.calibrated` are separate booleans on
+purpose. This project is currently in a state one boolean cannot express: a real
+recogniser running on thresholds that have never been measured against it.
+`calibrated` is hardcoded `false` in the response and
+`test_published_thresholds_are_disclosed_and_uncalibrated` asserts it stays false
+until Phase 10 produces a measurement.
 
 ### Types that exist because a literal had drifted
 
-Three interfaces here are not descriptions of the API. Each was added to make a
+Four interfaces here are not descriptions of the API. Each was added to make a
 specific class of silent mismatch a compile error, and each is worth reading
 before changing a field back to `string`.
 

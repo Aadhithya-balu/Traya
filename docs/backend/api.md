@@ -98,11 +98,29 @@ token or a responder JWT.
 | `POST /api/emergency/{session_id}/capture` | `session` | `CaptureRequest` | `CaptureOut` | Quality gate only; does not match. |
 | `POST /api/emergency/{session_id}/identify` | `session` | `IdentifyRequest` | `IdentifyOut` | Carries `engine_mode` and `demo_mode`. |
 | `POST /api/emergency/{session_id}/confirm` | `permission: confirm_identity` + session | `ConfirmRequest` | `dict` | Human confirmation of a candidate. |
-| `GET /api/emergency/{session_id}/medical-summary` | `session` | - | `dict` | **403** unless `status == "completed"` and `identified_user_id` is set. Public subset only. |
-| `GET /api/emergency/{session_id}/responder-profile` | `permission: view_emergency_profile` + session | - | `dict` | Extends the public summary. |
-| `POST /api/emergency/{session_id}/contact` | `session` | `ContactActionIn` | `ContactActionOut` | `call`, `sms` or `share_location`. Logs, it does not send. |
+| `GET /api/emergency/{session_id}/medical-summary` | `permission: view_medical_alerts` + session | - | `dict` | **Phase 7.** Requires the permission *and* `status == "identified"`. The session token alone is refused (401) and a police responder is refused (403): identification is necessary but not sufficient, and only `medical_responder` and `hospital` read this. Writes a `PROFILE_ACCESSED` event. |
+| `GET /api/emergency/{session_id}/responder-profile` | `permission: view_emergency_profile` + session | - | `dict` | Extends the public summary. What police get instead of the clinical record. |
+| `POST /api/emergency/{session_id}/contact` | `session` | `ContactActionIn` | `ContactActionOut` | `call`, `sms` or `share_location`. Logs, it does not send. 403 until the person is identified. Records `CONTACT_INITIATED` with `channel: "responder_reported"` — **the responder is reporting that they made contact, not performing it**, and conflating the two would put a false notification in the audit record. |
 | `POST /api/emergency/{session_id}/location` | `session` | `LocationIn` | `LocationOut` | `source` must reflect reality: `gps` or `manual`. |
-| `GET /api/emergency/{session_id}/timeline` | `session` | - | `TimelineEventOut[]` | Chronological audit for the session. |
+| `GET /api/emergency/{session_id}/timeline` | `session` | - | `TimelineEventOut[]` | The **audit trail** for the session. Distinct from `/events`. |
+| `GET /api/emergency/{session_id}/events` | `session` | - | `IncidentTimelineOut` | **Phase 7.** The incident event log, ordered by `sequence` rather than timestamp so same-millisecond events cannot reorder themselves. Operational, not administrative: answers "how was this person identified?". |
+| `GET /api/emergency/thresholds` | public | - | `dict` | **Phase 7.** Unauthenticated, no user data. Declared **above** `/{session_id}` on purpose - FastAPI matches in declaration order, so a `/{session_id}` route defined first would swallow `/thresholds`. Carries `dimension`, `engine_mode`, `simulated` and `calibrated`. |
+
+### Fallback paths
+
+Four paths, so no confident failure leaves a responder at a dead end. All five
+endpoints require `permission: identify_person` **and** the session: a
+bystander's session token is refused (401). Every one writes an `incident_event`
+carrying its `fallback_used` path, and none trusts the responder's word about an
+identity - each resolves through the database.
+
+| Endpoint | Body | Result |
+|---|---|---|
+| `POST /api/emergency/{session_id}/fallback/emergency-identifier` | `EmergencyIdentifierIn` | Resolves a contact phone number. **Deliberately not a name search** - matching a name against every user would make this an enumeration primitive, and a card in someone's hand is far more specific than a name. 404 writes a failed-resolution event rather than inventing an identity. |
+| `POST /api/emergency/{session_id}/fallback/manual-entry` | `ManualEntryIn` | Name plus **one mandatory corroborating detail**, or an explicit `subject_id`. Sets `MANUAL_CONFIRMED`, never `HUMAN_CONFIRMED`. A name matching more than one user is a question, not a coin flip. |
+| `POST /api/emergency/{session_id}/fallback/assistance` | `AssistanceRequestIn` | Moves the incident to `assistance_in_progress`. The proposed subject cannot be the requester. |
+| `POST /api/emergency/{session_id}/fallback/assistance/confirm` | `AssistanceConfirmIn` | **400** if `confirmed_by == requested_by`. Two people or the check means nothing. |
+| `POST /api/emergency/{session_id}/fallback/unidentified` | `UnidentifiedIn` | Resolves the incident with `outcome="unidentified"` and `MANUAL_UNIDENTIFIED`. Exists so "we do not know who this is" is a supported outcome: a system that cannot record it will either refuse to help or invent an identity. |
 
 Rate limited to 10 requests per 60s per IP by `RateLimitMiddleware`, which
 returns 429 with a `Retry-After` header and writes a `rate_limited` audit row.

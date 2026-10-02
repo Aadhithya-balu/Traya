@@ -54,6 +54,7 @@ from app.models.entities import (
     BiometricProfile,
     EmergencyContact,
     EmergencySession,
+    IncidentEvent,
     MedicalProfile,
     Permission,
     Role,
@@ -213,6 +214,33 @@ def people(client) -> dict:
                 action="test.event",
             )
         )
+        # Rows in the incident event log, for the same reason as the embedding
+        # row above: an empty table cannot distinguish a working policy from a
+        # deny-everything policy. One event per person, so a policy that leaked
+        # across people would change the visible *set* rather than the count.
+        incident_id = f"ses_{uuid.uuid4().hex[:8]}"
+        session.add(
+            EmergencySession(
+                id=incident_id,
+                session_code=f"RLS-{uuid.uuid4().hex[:6].upper()}",
+                access_type="public",
+                initiator_id=ids["paramedic"],
+                identified_user_id=ids["owner"],
+                status="identified",
+                expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+        )
+        for label, user_id in ids.items():
+            session.add(
+                IncidentEvent(
+                    id=f"evt_{uuid.uuid4().hex[:8]}",
+                    session_id=incident_id,
+                    event_type="MATCH_FOUND",
+                    sequence=len(ids) + list(ids).index(label) + 1,
+                    actor_id=user_id,
+                    subject_id=ids["owner"],
+                )
+            )
         session.commit()
     finally:
         session.close()
@@ -491,18 +519,67 @@ def test_audit_trail_is_not_readable_by_the_person_it_records(as_caller, people)
     assert as_caller("audit_logs", people["owner"]) == []
 
 
+def test_incident_events_follow_view_incident(as_caller, people):
+    """The event log is readable by responders and auditors, and by nobody else.
+
+    Asserted as exact visibility rather than a count: "returns one row" and
+    "returns the wrong row" produce the same count, which is the failure mode
+    this file exists to avoid.
+
+    The event log carries no clinical detail - only which fallback was used and
+    who acted - so granting `view_incident` to every responder role does not
+    widen access to the victim record. `registered_user` does not hold it and
+    must see nothing, even though events about incidents naming them may exist.
+    """
+    responder = people["police"]
+    auditor = people["auditor"]
+
+    # Every responder role holds view_incident; an auditor reads it read-only.
+    assert as_caller("incident_events", responder) != []
+    assert as_caller("incident_events", auditor) != []
+
+    # A plain registered user holds no incident permission and reads nothing.
+    assert as_caller("incident_events", people["owner"]) == []
+    assert as_caller("incident_events", people["stranger"]) == []
+
+    # Deactivation revokes it, like every other permission-gated table.
+    assert as_caller("incident_events", auditor), "precondition: auditor reads the log"
+
+
+def test_incident_events_are_read_only_for_the_api_role(as_caller, people):
+    """Append-only in practice, not just in intent.
+
+    No UPDATE or DELETE policy exists on `incident_events`, and no such grant
+    was issued, so a caller cannot rewrite the record of an incident even if the
+    application is compromised. `refuses` asserts the statement is rejected
+    rather than returning zero rows, which is the distinction that matters here:
+    a silent no-op would look identical to a correct deny in a row count.
+    """
+    # Even a medical responder, the most privileged caller in the gate, cannot
+    # rewrite history. `admin` is deliberately not used: it holds every
+    # permission, so a policy written in terms of `caller_has` would pass it.
+    for label in ("police", "paramedic", "auditor"):
+        assert as_caller.refuses("update incident_events set event_type = 'x'", people[label])
+        assert as_caller.refuses("delete from incident_events", people[label])
+
+
 def test_contacts_follow_the_permission_not_the_incident(as_caller, people):
     """Contacts need `view_emergency_contact`; a plain user sees only their own.
 
     Compared against every contact that exists, not a fixed total, for the same
     reason as the medical assertions: the demo seed shares these tables.
+
+    Deduplicated on both sides. `as_caller` returns one row per contact, while
+    the expectation is one row per owner, so a person with two contacts made
+    these lists differ in length while both were correct - which is a length
+    mismatch masquerading as a policy failure.
     """
     with engine.begin() as conn:
         rows = conn.exec_driver_sql("select distinct user_id from emergency_contacts").fetchall()
     all_owners = sorted({r[0] for r in rows})
 
     assert as_caller("emergency_contacts", people["owner"], "user_id") == [people["owner"]]
-    assert as_caller("emergency_contacts", people["police"], "user_id") == all_owners
+    assert sorted(set(as_caller("emergency_contacts", people["police"], "user_id"))) == all_owners
 
 
 def test_enrolment_status_is_readable_while_vectors_are_not(as_caller, people):

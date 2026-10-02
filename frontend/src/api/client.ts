@@ -13,10 +13,13 @@ import type {
   DemoScenario,
   EmergencyContact,
   EmergencyStartOut,
+  FallbackResult,
   HospitalAdmin,
   HospitalNearby,
   IdentifyResult,
+  IncidentTimeline,
   MedicalProfile,
+  PublishedThresholds,
   PublicSummary,
   ResponderProfile,
   SessionStatus,
@@ -252,6 +255,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ candidate_user_id: candidateUserId, accept }),
     }),
+  /**
+   * Clinical summary. Requires an authenticated responder holding
+   * `view_medical_alerts`; a session token is refused with 401. The caller must
+   * be ready to handle that, because a police responder is a legitimate caller
+   * who will get 403 here and is entitled to the responder profile instead.
+   */
   medicalSummary: (sessionId: string) => request<PublicSummary>(`/emergency/${sessionId}/medical-summary`),
   responderProfile: (sessionId: string) => request<ResponderProfile>(`/emergency/${sessionId}/responder-profile`),
   contactAction: (sessionId: string, action: "call" | "sms" | "share_location") =>
@@ -265,7 +274,70 @@ export const api = {
       `/emergency/${sessionId}/location`,
       { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ latitude, longitude, source }) },
     ),
+  /** The audit trail. Readable with the session token; for administrators. */
   timeline: (sessionId: string) => request<TimelineEvent[]>(`/emergency/${sessionId}/timeline`),
+  /**
+   * The incident event log, distinct from `timeline`.
+   *
+   * `timeline` is the audit trail and needs `view_audit_logs` to be useful;
+   * this is the operational record and is readable by anyone authorized on the
+   * session. It answers "how was this person identified?", which is the question
+   * a responder at the scene actually has.
+   */
+  incidentEvents: (sessionId: string) => request<IncidentTimeline>(`/emergency/${sessionId}/events`),
+
+  // --- fallback paths, Phase 7 ---
+  // Four paths, so a responder is never stuck. Each returns which path resolved
+  // the identity, and `method` is the same value the incident log records.
+  fallbackByIdentifier: (sessionId: string, identifier: string) =>
+    request<FallbackResult>(`/emergency/${sessionId}/fallback/emergency-identifier`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ identifier }),
+    }),
+  fallbackManualEntry: (
+    sessionId: string,
+    payload: { full_name: string; corroborating_detail?: string | null },
+  ) =>
+    request<FallbackResult>(`/emergency/${sessionId}/fallback/manual-entry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  fallbackRequestAssistance: (sessionId: string, proposedSubjectId?: string | null) =>
+    request<FallbackResult>(`/emergency/${sessionId}/fallback/assistance`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proposed_subject_id: proposedSubjectId ?? null }),
+    }),
+  fallbackConfirmAssistance: (
+    sessionId: string,
+    payload: { confirmed_subject_id: string; requested_by: string },
+  ) =>
+    request<FallbackResult>(`/emergency/${sessionId}/fallback/assistance/confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+  /**
+   * Continue with nobody identified. A supported outcome, not a failure: the
+   * system must be able to say "we do not know who this is" and keep going.
+   */
+  fallbackUnidentified: (sessionId: string, reason?: string | null) =>
+    request<FallbackResult>(`/emergency/${sessionId}/fallback/unidentified`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason ?? null }),
+    }),
+
+  /**
+   * Published thresholds and the active engine's identity.
+   *
+   * Unauthenticated, and `simulated` / `calibrated` are the fields a UI must
+   * surface. Rendering "82% confidence" without saying the thresholds are
+   * provisional implies a validation this project has never performed.
+   */
+  thresholds: () => request<PublishedThresholds>("/emergency/thresholds"),
 
   // hospitals
   nearbyHospitals: (lat: number, lng: number, radiusKm = 50) =>
