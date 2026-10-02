@@ -424,9 +424,192 @@ def test_result_screen_renders_the_disclosure():
     assert "engine_mode" in hub, (
         "the result screen must surface which engine produced the match"
     )
-    assert "Simulated match" in hub, (
-        "a simulated result must say so in plain words, not only in a field name"
+    for key in ("hub.engine.simulationTitle", "hub.engine.simulationBody"):
+        assert key in hub, (
+            "a simulated result must say so in plain words, not only in a field "
+            f"name; render {key}"
+        )
+
+
+# --- locale integrity ------------------------------------------------------
+
+
+def _locales() -> dict[str, dict[str, str]]:
+    base = FRONTEND / "i18n" / "locales"
+    return {
+        name: json.loads((base / name).read_text(encoding="utf-8"))
+        for name in ("en.json", "ta.json")
+    }
+
+
+def test_both_catalogues_carry_identical_keys():
+    """A key present in one language and absent in the other is a silent crash.
+
+    The Tamil half of the app is a first-class requirement, not a fallback, so
+    the two catalogues are asserted to be exactly equal in shape rather than
+    merely "the English one has most things".
+    """
+    catalogues = _locales()
+    en, ta = set(catalogues["en.json"]), set(catalogues["ta.json"])
+    assert en == ta, (
+        "catalogue keys differ: "
+        f"only in en={sorted(en - ta)} only in ta={sorted(ta - en)}"
     )
+    assert en, "the catalogues must not be empty"
+
+
+def test_no_catalogue_value_is_corrupted_by_an_encoding_round_trip():
+    """Guard the bug that actually happened, by its signature.
+
+    Two simulation-disclosure strings were written through a PowerShell pipeline
+    whose console encoding could not represent the prose. Every character it
+    could not encode was replaced by a literal '?', so the banner shipped as two
+    rows of question marks and the simulation was presented to a responder as an
+    unreadable string rather than as a warning. Typecheck and build both passed,
+    because a row of '?' is a perfectly valid string.
+
+    Two signatures are asserted: a run of two or more '?' (the substitution
+    signature), and U+FFFD (the replacement character, if a future editor
+    decodes instead of substitutes).
+    """
+    for name, table in _locales().items():
+        for key, value in table.items():
+            run = re.search(r"\?{2,}", value)
+            assert run is None, (
+                f"{name}:{key} contains a run of '?' at offset {run.start() if run else 0}; "
+                "this is the signature of text mangled by a shell encoding "
+                "round-trip, not a legitimate string"
+            )
+            assert "\ufffd" not in value, f"{name}:{key} contains U+FFFD"
+
+
+def test_the_simulation_disclosure_is_readable_in_both_languages():
+    """The safety banner must actually say something, in each catalogue.
+
+    `test_engine_mode_is_disclosed_on_every_result` proves the API reports the
+    mode; this proves a human can read what the client will show them. An empty
+    or question-mark-only banner would satisfy every other disclosure test.
+    """
+    catalogues = _locales()
+    for name, table in catalogues.items():
+        title = table.get("hub.engine.simulationTitle", "")
+        body = table.get("hub.engine.simulationBody", "")
+        assert len(title.strip()) >= 8, (
+            f"{name}: the simulation banner title is empty or too short to read"
+        )
+        assert len(body.split()) >= 8, (
+            f"{name}: the simulation banner body must explain itself, not just "
+            "name the engine"
+        )
+        # Tamil must actually be Tamil here, not a Latin transliteration.
+        if name == "ta.json":
+            tamil = sum(1 for ch in body if 0x0B80 <= ord(ch) <= 0x0BFF)
+            assert tamil >= 10, (
+                "ta.json: the simulation banner body must be written in Tamil"
+            )
+
+
+# --- Phase 9: the nine result states ---------------------------------------
+
+#: The outcomes the identification pipeline can produce. Mirrors the
+#: `IdentifyStatus` union in `api/types.ts`; a mismatch in either direction is a
+#: bug, which is why this is asserted rather than imported.
+NINE_STATES = {
+    "HIGH_CONFIDENCE",
+    "CONFIRMED",
+    "REVIEW_REQUIRED",
+    "MULTIPLE_CANDIDATES",
+    "LOW_CONFIDENCE",
+    "NO_MATCH",
+    "NO_FACE",
+    "MULTIPLE_FACES",
+    "POOR_QUALITY",
+}
+
+
+def _result_state_table() -> dict[str, dict[str, str]]:
+    """The badge/next pair per state, parsed from the client source.
+
+    Parsed textually rather than by executing TypeScript: the suite has no node
+    runner, and the properties under test - which states exist, and which keys
+    they name - are exactly what is written in the file.
+    """
+    source = read("api", "resultStates.ts")
+    body = source.split("RESULT_STATES: Record<IdentifyStatus, ResultState> = {", 1)[1]
+    body = body.split("\n};", 1)[0]
+    states: dict[str, dict[str, str]] = {}
+    for chunk in re.finditer(
+        r"(\w+):\s*\{(.*?)\}", body, re.DOTALL
+    ):
+        name, fields = chunk.group(1), chunk.group(2)
+        badge = re.search(r'badge:\s*"([^"]+)"', fields)
+        nxt = re.search(r'next:\s*"([^"]+)"', fields)
+        if badge and nxt:
+            states[name] = {"badge": badge.group(1), "next": nxt.group(1)}
+    return states
+
+
+def test_every_identification_state_has_a_badge_and_a_next_action():
+    """Phase 9's gate: nine reachable states, each telling the responder what to do.
+
+    Before this table existed, three of the nine were rendered by no code path at
+    all, and two of the rest printed their raw enum to the screen - a responder
+    saw the word "multiple candidates" with no indication of what to do about
+    it. Asserting the map's shape here keeps that from regressing silently.
+    """
+    states = _result_state_table()
+    assert set(states) == NINE_STATES, (
+        "RESULT_STATES must cover exactly the nine identification outcomes; "
+        f"missing={sorted(NINE_STATES - set(states))} "
+        f"unexpected={sorted(set(states) - NINE_STATES)}"
+    )
+
+    order = read("api", "resultStates.ts").split("RESULT_STATE_ORDER = [", 1)[1]
+    ordered = set(re.findall(r'"(\w+)"', order.split("]", 1)[0]))
+    assert ordered == NINE_STATES, (
+        "RESULT_STATE_ORDER must be a permutation of the nine states so the demo "
+        "can exercise every branch"
+    )
+
+
+def test_no_two_result_states_share_the_same_badge_text():
+    """A duplicate badge is a state that has quietly stopped being distinguishable.
+
+    This is the defect that motivated the table, so it is pinned: if two states
+    resolve to the same English string, a responder cannot tell them apart even
+    though the code says they are different.
+    """
+    en = _locales()["en.json"]
+    seen: dict[str, str] = {}
+    for state, keys in _result_state_table().items():
+        for slot in ("badge", "next"):
+            key = keys[slot]
+            assert key in en, (
+                f"{state}.{slot} names key {key!r}, which is absent from en.json; "
+                "the screen would render the raw key"
+            )
+            text = en[key]
+            assert text.strip(), f"{key} is an empty string"
+            fingerprint = "{}::{}".format(slot, text)
+            if slot == "badge":
+                assert fingerprint not in seen, (
+                    "states {} and {} render the identical badge {!r}; a responder "
+                    "cannot act on a distinction they cannot see".format(
+                        seen.get(fingerprint), state, text
+                    )
+                )
+                seen[fingerprint] = state
+
+
+def test_result_state_keys_exist_in_both_languages():
+    """A state reachable only in English is not translated, it is broken."""
+    catalogues = _locales()
+    for state, keys in _result_state_table().items():
+        for slot, key in keys.items():
+            for name, table in catalogues.items():
+                assert key in table, (
+                    f"{state}.{slot} -> {key!r} is missing from {name}"
+                )
 
 
 # --- design-system traps ---------------------------------------------------

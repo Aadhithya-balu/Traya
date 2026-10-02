@@ -129,8 +129,8 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 
 | Fact | Value |
 |---|---|
-| Backend tests | **403 passed, 0 skipped** on real Postgres; **374 passed + 29 skipped** on SQLite |
-| Backend tests on real Postgres | **403 passed, 0 skipped**, ~113s. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
+| Backend tests | **409 passed, 0 skipped** on real Postgres; **380 passed + 29 skipped** on SQLite |
+| Backend tests on real Postgres | **409 passed, 0 skipped**, ~171s. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
 | Hosted Supabase | **Live and verified.** PostgreSQL 17.11, 23 tables, RLS on 23/23 with 19 policies, 7 roles / 18 permissions, emergency flow HIGH_CONFIDENCE 0.995 |
 | Frontend typecheck | **passes**, exit 0, strict TS |
 | `npm run docs:check` | **passes**, 31 pages |
@@ -259,6 +259,24 @@ Ranked in [docs/AUDIT.md](docs/AUDIT.md#bugs-ranked). The five that matter:
     Keep the guard.
 18. **Every user-visible string is an i18n key.** Five pages still hardcode
     English (see the gap list in §7).
+18a. **Never write a user-visible string through a shell pipeline.** The
+    i18n catalogues moved to `i18n/locales/*.json` in Phase 9 for exactly this
+    reason: `hub.engine.simulationTitle` and `hub.engine.simulationBody` were
+    written through PowerShell, whose console encoding could not represent the
+    prose, so **every** character it could not encode became a literal `?`. The
+    simulation disclosure — the one string in the product that must never be
+    unreadable — shipped as two rows of question marks. Typecheck passed. The
+    build passed. Both catalogues were "symmetric" by key count. A row of `?`
+    is a valid string, so **no existing assertion could see it.**
+    `test_no_catalogue_value_is_corrupted_by_an_encoding_round_trip` now asserts
+    the signature (a run of 2+ `?`, or `U+FFFD`) directly. Keep it that way:
+    edit JSON with the editor or Python `encoding="utf-8"`, never with
+    `Set-Content`, a here-string, or a piped `echo`.
+    Two related traps in the same place: a PowerShell console **renders valid
+    Unicode as `?` too**, so `?` in terminal output proves nothing in either
+    direction — check codepoints, not the screen. And an interpolation token
+    (`{mode}`, `{total}`) is legitimately Latin inside a Tamil value, so a
+    "no Latin in Tamil" rule must exempt `\{[a-z]+\}`.
 
 ### Backend architecture
 
@@ -417,7 +435,8 @@ C:\Traya\
       context\               AuthContext, EmergencyContext
       hooks\                 useCamera, useGeolocation
       api\                   client.ts (the only network boundary), types.ts
-      i18n\                  strings.ts — 196 keys, en + ta, type-safe
+      i18n\                  locales/en.json + ta.json — 287 keys each, UTF-8 no BOM;
+                             strings.ts is a typed re-export over them
       theme\                 ThemeProvider
   docs\                      31 pages — see §6
   scripts\                   dev-all.mjs, check-docs.mjs
@@ -554,10 +573,16 @@ diagnostic an unexplained 422 has). Details in
    **bucket retention policies** are dashboard work with no portable SQL.
 4. **Five pages still hardcode English**: `EmergencyHub`, `Profile`, `Admin`,
    `Demo`, `Privacy`. Their colours are migrated; their strings are not.
-5. **63 of 196 i18n keys are unreferenced.** The `enroll.*` namespace is no
-   longer among them — Phase 6 wired all of it — but `common`, `result`,
-   `medical`, `location`, `profile`, `admin` and `emergency` still carry keys no
-   page renders, and `Privacy` does not use its own namespace at all.
+5. **The i18n catalogue is now 287 keys each in JSON, and Phase 9 has consumed
+   the `hub.*` and `analytics.*` namespaces plus the whole `result.*` set.**
+   `EmergencyHub` was rewritten in Phase 9 and no longer hardcodes English. What
+   is still unwired: `Profile`, `Admin`, `Demo` and `Privacy` still hardcode
+   English, `useCamera`/`useGeolocation` still return raw English error strings,
+   and the `medical`, `profile`, `admin`, `emergency`, `contact`, `location` and
+   `dashboard` namespaces still carry keys no page renders. `Privacy` does not
+   use its own namespace at all. `test_both_catalogues_carry_identical_keys`
+   asserts the two catalogues are identical in shape, so a gap is a page that
+   does not call `t()`, not a missing key.
 6. ~~**`backend/.env.example` documents 20 of 36 settings.**~~ **Fixed in Phase
    11** — all 48 are documented, and a test fails the build if one is added
    without a line here. Do not re-report.

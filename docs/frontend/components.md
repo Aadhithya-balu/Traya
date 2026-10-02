@@ -114,18 +114,38 @@ in paint order without z-index gymnastics.
 
 ## Tabs
 
-`components/Tabs.tsx` -> `Tabs` (generic over `T extends string`) and
+`components/Tabs.tsx` -> `Tabs` (generic over `T extends string`), `TabPanel`,
 `ListRow`.
 
 | Component | Props |
 |---|---|
-| `Tabs` | `tabs: ReadonlyArray<{ id: T; label: StringKey }>`, `value: T`, `onChange: (id: T) => void` |
-| `ListRow` | `to?: string`, `onClick?: () => void`, `title: string`, `subtitle?: string`, `trailing?: ReactNode` |
+| `Tabs` | `tabs: ReadonlyArray<{ id: T; label: StringKey }>`, `value: T`, `onChange: (id: T) => void`, `label: StringKey`, `idPrefix: string` |
+| `TabPanel` | `tabId: string`, `idPrefix: string`, `active: boolean`, `children: React.ReactNode`, `className?: string` |
+| `ListRow` | `to?: string`, `onClick?: () => void`, `title: string`, `subtitle?: string`, `trailing?: React.ReactNode` |
 
 `Tabs` is a horizontally scrollable `role="tablist"` strip that keeps the
 selected tab in view via a ref callback and `querySelector('[aria-selected]')`.
 The ref callback runs that query on **every** ref invocation, not only when the
 tab set changes, so it queries far more often than it needs to.
+
+`label` and `idPrefix` became required in Phase 9. `label` is the accessible
+name of the tablist - without it a screen reader announces a group of buttons
+with no indication of what they switch. `idPrefix` namespaces the generated
+`role="tab"` / `role="tabpanel"` id pair, so two tab strips on one screen cannot
+collide in the accessibility tree.
+
+Phase 9 added the WAI-ARIA tabs keyboard model, because the emergency flow has
+to be completable without a pointer: **Left/Right** move (with wraparound),
+**Home/End** jump to the ends, and only the selected tab is in the tab sequence
+(roving `tabindex`, `0` on selected and `-1` on the rest). Moving focus is
+separate from activating - arrow keys move focus and select, matching the
+automatic-activation pattern, which is acceptable here because no tab triggers a
+network request on focus alone.
+
+`TabPanel` renders `role="tabpanel"` with `aria-labelledby` pointing at its tab,
+and `hidden` when inactive. It carries `tabIndex={0}` so a keyboard user can
+scroll a long panel without first reaching the tab strip - a panel that is not
+focusable is unreachable content for someone not using a pointer.
 
 `ListRow` renders a `<Link>` when `to` is set and a `<button>` otherwise, so one
 component serves both navigation rows and action rows. If neither `to` nor
@@ -134,44 +154,121 @@ type if you want that to be a compile error.
 
 `ListRow` is used only by `Layout`. `React.ReactNode` is referenced without
 importing `React`; it compiles today via the UMD global from `@types/react`,
-which is fragile. Prefer `import type { ReactNode } from "react"`.
+which is fragile. Prefer `import type { ReactNode } from "react"`. The same
+applies to `TabPanel`.
 
 `ListRow` and the `Tabs` strip both gained `tap` in Phase 2 — they were
 `py-3 text-sm` and `py-3 text-sm` with no minimum, so a two-word row measured
 under 44px.
 
+**`Tabs` was dead code until Phase 9.** No page imported it; the emergency hub
+drew its tabs as plain buttons with no role, no keyboard model and no panel
+association. It is now the only way to build a tab strip.
+
+## LiveStatus
+
+`components/LiveStatus.tsx` -> `LiveStatus`.
+
+| Prop | Type | Default |
+|---|---|---|
+| `message` | `string` | required |
+| `assertive` | `boolean` | `false` |
+| `className` | `string` | `""` |
+
+Announces a short state change to assistive technology without moving focus.
+Phase 9's gate requires that a screen reader announces every capture and
+identification state; this is the component that makes that possible.
+
+Two implementation details that are easy to get wrong, and are the reason this
+is a component rather than an `aria-live` attribute:
+
+- The region is **always rendered**, even when the message is empty. A live
+  region added to the DOM at the same moment as its text is frequently not
+  announced at all, because the assistive technology never observed it change.
+- The previous message is cleared for one frame before the new one is set.
+  Setting identical text twice is not a change, so "Identifying…" followed by
+  "Identifying…" on a retake would otherwise be silent.
+
+`assertive` interrupts whatever is being read. Correct for a failed
+identification and a confirmation; wrong for routine progress. The emergency hub
+passes `className="sr-only"` so the announcement is not visible on screen.
+
 ## StatusBadge
 
-`components/StatusBadge.tsx` -> `StatusBadge`, `ScoreBar`, `SimulationNotice`.
+`components/StatusBadge.tsx` -> `StatusBadge`, `NextAction`, `GenericStatusBadge`,
+`ScoreBar`, `SimulationNotice`.
 
 ### StatusBadge
 
-`{ status: string }`. Maps a backend status to a plain-language i18n label and a
-tone, via the `STATUS` map and `TONE_CLASS`.
+`{ status: AnalyticsStatus }`. Resolves through `analyticsBadge`, which reads
+`RESULT_STATES` in `api/resultStates.ts`.
 
-The mapping deliberately describes what a person should do rather than echoing
-the enum, so nobody has to know what `REVIEW_REQUIRED` means.
+**Phase 9 rewrote this.** It previously took a bare `string` and fell back to
+`status.replaceAll("_", " ")`, which meant two of the nine states -
+`MULTIPLE_CANDIDATES` and `CONFIRMED` - rendered as internal enum names on
+screen, in a product whose stated goal is that nobody reads ML vocabulary
+during an emergency. The lookup is now total by construction: `RESULT_STATES` is
+keyed on `IdentifyStatus`, so a new backend state will not compile until someone
+decides what a responder should be told.
 
-| Status | Label key | Tone |
-|---|---|---|
-| `HIGH_CONFIDENCE` | `result.high` | ok |
-| `REVIEW_REQUIRED` | `result.review` | warn |
-| `LOW_CONFIDENCE` | `result.low` | warn |
-| `NO_MATCH` | `result.none` | danger |
-| `NO_FACE` | `result.none` | danger |
-| `MULTIPLE_FACES` | `result.none` | danger |
-| `POOR_QUALITY` | `emergency.quality.unusable` | danger |
+The parameter is `AnalyticsStatus` rather than `IdentifyStatus` only so a report
+bucket can reuse the badge; `analyticsBadge` resolves the extra `unknown` member
+and returns a neutral tone for it. Every live-result caller passes one of the
+nine.
 
-Two issues:
+| State | Badge key | Next-action key | Tone |
+|---|---|---|---|
+| `HIGH_CONFIDENCE` | `result.high` | `result.next.high` | go |
+| `CONFIRMED` | `result.confirmed` | `result.next.confirmed` | go |
+| `REVIEW_REQUIRED` | `result.review` | `result.next.review` | decide |
+| `MULTIPLE_CANDIDATES` | `result.multiple` | `result.next.multiple` | decide |
+| `LOW_CONFIDENCE` | `result.low` | `result.next.low` | lookAgain |
+| `NO_MATCH` | `result.none` | `result.next.nomatch` | lookAgain |
+| `NO_FACE` | `result.noface` | `result.next.retake` | retake |
+| `MULTIPLE_FACES` | `result.multiplefaces` | `result.next.multiplefaces` | retake |
+| `POOR_QUALITY` | `emergency.quality.unusable` | `result.next.poorquality` | retake |
 
-- `NO_MATCH`, `NO_FACE` and `MULTIPLE_FACES` **collapse to the same label**, so
-  a responder cannot distinguish "nobody is enrolled" from "two people are in
-  frame" - and those need opposite responses. Split them.
-- ~~`TONE_CLASS` uses classes Tailwind drops.~~ **Fixed in Phase 1.** `bg-ok/15`
-  and its siblings were no-ops because the ramp had no `<alpha-value>`; see
-  [design system](design-system.md#every-colour-is-stored-twice-and-the-second-copy-is-load-bearing).
-  Badge tints now render. Asserted by
-  `test_every_opacity_modifier_on_a_ramp_colour_resolves`.
+~~`NO_MATCH`, `NO_FACE` and `MULTIPLE_FACES` collapse to the same label.~~
+**Fixed in Phase 9** - each has its own badge and its own instruction, because
+"nobody is enrolled" and "two people are in frame" need opposite responses.
+Asserted by `test_no_two_result_states_share_the_same_badge_text`, which fails
+if two states ever resolve to the same English string again.
+
+~~`TONE_CLASS` uses classes Tailwind drops.~~ **Fixed in Phase 1.** `bg-ok/15`
+and its siblings were no-ops because the ramp had no `<alpha-value>`; see
+[design system](design-system.md#every-colour-is-stored-twice-and-the-second-copy-is-load-bearing).
+Badge tints now render. Asserted by
+`test_every_opacity_modifier_on_a_ramp_colour_resolves`.
+
+Colour never carries the meaning alone. Every state has a word as well as a
+tone, because tone is the channel that fails hardest for colour-blind users and
+in direct sunlight.
+
+### NextAction
+
+`{ status: IdentifyStatus }`. Renders the one line telling a responder what to do
+next, prefixed with an `sr-only` `result.next.label` so the sentence still reads
+as "Next action: ..." to a screen reader.
+
+This exists because the badge answers "what happened" and nothing on the screen
+answered "what now". A responder handed `REVIEW_REQUIRED` with no instruction
+has been given a classification, not a decision.
+
+The emergency hub renders it **above** the confidence bar, not below. A responder
+reading top to bottom should meet the instruction before the number, because the
+number is what they are most likely to over-trust.
+
+### GenericStatusBadge
+
+`{ status: string, labels: Record<string, StringKey> }`. A neutral badge for
+non-identification state (enrolment, incident, consent) where the caller supplies
+its own label map.
+
+Falls back to `status.replaceAll("_", " ").toLowerCase()` for an unmapped value,
+which is the same enum-echo the main badge used to have. Acceptable here because
+these are administrative statuses a clinician is reading rather than an
+emergency decision, but it is the same trade and should not be copied to a
+responder-facing screen.
 
 ### ScoreBar
 
@@ -183,7 +280,15 @@ Two issues:
 
 Renders confidence as a bar with the percentage alongside, plus tick marks at
 the two thresholds so a responder can see how close a result is to the review
-line without reading the number. `null` renders `n/a` rather than `NaN%`.
+line without reading the number. `null` renders `common.notApplicable` rather
+than `NaN%`; it used to hardcode the string `"n/a"`, which the Phase 9 gate
+forbids and which the Tamil catalogue could not express.
+
+`useI18n` is called **before** the `value === null` early return, deliberately.
+Calling a hook after an early return makes the hook count depend on `value`, and
+a result that renders as null and then arrives with a score - exactly what
+happens while an identification is in flight - would change the number of hooks
+on an already-mounted component.
 
 `pct` is unclamped, so a backend value above 1.0 would overflow the bar. Clamp
 it if the API is ever allowed to return one.
@@ -198,13 +303,12 @@ wiring this component, because the notice had to be positioned above the
 confidence bar and had to be non-dismissible, and that needed page-level
 knowledge this component does not have.
 
-The result is **two implementations of the same disclosure**, one of which is
-the documented, i18n-backed, reusable one. That is a real duplication and the
-duplicate is the uglier of the pair. Phase 2 should consolidate: promote
-`EngineDisclosure` into this component, keep the placement rule, and render it
-in `Demo` too — `Demo` shows an `IdentifyResult` with no disclosure at all,
-which is the same omission in a page a reviewer is far more likely to open
-first.
+Phase 9 moved the disclosure **strings** into the catalogues but deliberately left
+the two components in place, because consolidating them is a behavioural change
+to the most safety-critical element in the product and belongs in its own change
+with its own verification. `Demo` still shows an `IdentifyResult` with no
+disclosure at all, which is the same omission in a page a reviewer is far more
+likely to open first.
 
 Per [ADR 0001](../decisions/0001-simulation-biometric-engine.md) the disclosure
 belongs on every result.

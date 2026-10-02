@@ -45,6 +45,37 @@ export interface Quality extends QualityScores {
   lighting_score: number;
 }
 
+export type AnalyticsStatus = IdentifyStatus | "unknown";
+
+/**
+ * The nine identification outcomes the backend can return.
+ *
+ * A union rather than `string` on purpose. `AGENTS.md` rule 14 records that five
+ * Phase 1 defects were a wrong literal against a loose type, and this field is
+ * where a responder reads the outcome of the whole product. `StatusBadge` maps
+ * this exhaustively, so a tenth state added to the pipeline without a label here
+ * is a compile error rather than a screen that quietly prints
+ * "multiple candidates" to somebody in an emergency.
+ *
+ * Grouped by what the responder should do, which is the only distinction that
+ * matters at 3am.
+ *
+ * - Go: HIGH_CONFIDENCE, CONFIRMED
+ * - Decide: REVIEW_REQUIRED, MULTIPLE_CANDIDATES
+ * - Look again: LOW_CONFIDENCE, NO_MATCH
+ * - Retake the photo: NO_FACE, MULTIPLE_FACES, POOR_QUALITY
+ */
+export type IdentifyStatus =
+  | "HIGH_CONFIDENCE"
+  | "CONFIRMED"
+  | "REVIEW_REQUIRED"
+  | "MULTIPLE_CANDIDATES"
+  | "LOW_CONFIDENCE"
+  | "NO_MATCH"
+  | "NO_FACE"
+  | "MULTIPLE_FACES"
+  | "POOR_QUALITY";
+
 export interface Candidate {
   user_id: string;
   confidence: number;
@@ -55,7 +86,7 @@ export interface Candidate {
 
 export interface IdentifyResult {
   session_id: string;
-  status: string;
+  status: IdentifyStatus;
   human_readable: string;
   confidence: number | null;
   candidates: Candidate[];
@@ -440,7 +471,7 @@ export interface Analytics {
   failed_attempts: number;
   average_identification_time_ms?: number | null;
   identifications_by_day: { day: string; count: number }[];
-  status_breakdown: { status: string; count: number }[];
+  status_breakdown: { status: AnalyticsStatus; count: number }[];
 }
 
 export interface AdminUser {

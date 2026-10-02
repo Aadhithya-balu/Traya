@@ -319,14 +319,35 @@ config that no class references. It is 48px, and there is no control that needs
 
 ## i18n namespaces
 
-`i18n/strings.ts` holds `en` and `ta`. Keys are **flat strings with a dotted
-prefix**, not nested objects - `"nav.home"`, not `{ nav: { home } }`. Flat keys
-keep the `StringKey` type trivially derivable and make grep for a visible string
-reliable.
+**Phase 9 moved the catalogues out of TypeScript and into JSON.** They now live
+at `i18n/locales/en.json` and `i18n/locales/ta.json`; `i18n/strings.ts` is a
+typed re-export over them. Both files must be UTF-8 **without a BOM**.
 
-`i18n/index.ts` asserts at module load that `ta` defines **exactly** the same
-key set as `en`, so a missing translation is a startup error rather than an
-English word leaking into a Tamil screen.
+The reason is a specific failure, not style. Two simulation-disclosure strings
+were written through a PowerShell pipeline whose console encoding could not
+represent the prose, and every character it could not encode became a literal
+`?`. The safety banner shipped as two rows of question marks. Typecheck passed,
+the build passed, and both catalogues were "symmetric" by key count - a row of
+`?` is a perfectly valid string, and the key-count assertion could not see it.
+Strings now live in data files that no shell touches, and
+`test_no_catalogue_value_is_corrupted_by_an_encoding_round_trip` asserts the
+signature directly.
+
+The same failure mode applies to *editing* these files: `Get-Content` /
+`Set-Content` on a BOM-less UTF-8 file in PowerShell 5.1 rewrites the Tamil as
+mojibake and adds a BOM. Use the editor, or Python with explicit
+`encoding="utf-8"`.
+
+Keys are **flat strings with a dotted prefix**, not nested objects -
+`"nav.home"`, not `{ nav: { home } }`. Flat keys keep the `StringKey` type
+trivially derivable and make grep for a visible string reliable.
+
+`i18n/index.tsx` asserts at module load that `ta` defines **exactly** the same
+key set as `en`, in **both** directions, so a missing translation *and* an
+orphaned English key are both startup errors. One direction is not enough: an
+English key nobody renders is dead weight that looks like coverage.
+`backend/tests/test_frontend_contract.py` asserts the same invariant from
+pytest, which catches it before the client is ever loaded.
 
 Twenty namespaces:
 
@@ -340,7 +361,9 @@ Twenty namespaces:
 | `landing` | Hero, features, steps, CTAs. |
 | `auth` | Login and register. |
 | `emergency` | Capture flow, quality states, session start. |
-| `result` | Match status labels and confidence copy. |
+| `hub` | **New in Phase 9.** The emergency hub: tabs, live-region announcements, error copy, location, contact, medical, and the engine disclosure. |
+| `result` | Match status labels, next actions and confidence copy. |
+| `analytics` | **New in Phase 9.** Analytics status buckets, including `unknown`. |
 | `medical` | Medical profile and public summary. |
 | `contact` | Emergency contacts and contact actions. |
 | `location` | GPS, hospital list, routing. |
@@ -355,6 +378,12 @@ Twenty namespaces:
 
 `useI18n()` returns `{ t, locale, setLocale, toggle }`. Missing keys fall back
 to the key itself rather than rendering `undefined`.
+
+Language names are the one place a Tamil word is correct inside `en.json`:
+`lang.ta` is `தமிழ்` and `lang.en` is `English`, each in its own script, because
+a language switcher that shows "Tamil" in a Latin alphabet is a guess at the
+best. Asserted nowhere by a "no Tamil in English" rule, deliberately; the
+corruption guard looks for `?` runs and `U+FFFD`, not for non-ASCII text.
 
 Coverage is incomplete by design of the migration, not by accident: the legacy
 pages still hardcode English, and `Privacy` does not even use its `privacy.*`

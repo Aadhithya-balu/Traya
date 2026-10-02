@@ -17,14 +17,28 @@ const DICTIONARIES: Record<Locale, Record<StringKey, string>> = { en, ta };
 
 // A missing translation must fail loudly at import time, not render an English
 // word inside an otherwise Tamil screen.
+//
+// Checked in both directions. A key present in `en` and absent from `ta` is the
+// failure users see, but the reverse is the one that hides: an orphan key in
+// `ta` compiles cleanly, never renders, and survives every review, so the
+// catalogue slowly grows a second, dead vocabulary. Neither direction is
+// detectable from the key alone, so both are asserted here.
 for (const locale of LOCALES) {
-  if (locale === "en") continue;
   const missing = (Object.keys(en) as StringKey[]).filter(
     (key) => !(key in DICTIONARIES[locale]),
   );
+  const orphan = Object.keys(DICTIONARIES[locale]).filter(
+    (key) => !(key in en),
+  );
+
   if (missing.length) {
     throw new Error(
       `Locale "${locale}" is missing ${missing.length} key(s): ${missing.join(", ")}`,
+    );
+  }
+  if (orphan.length) {
+    throw new Error(
+      `Locale "${locale}" defines ${orphan.length} key(s) absent from "en": ${orphan.join(", ")}`,
     );
   }
 }

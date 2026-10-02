@@ -339,6 +339,46 @@ schemas is a cheap, high-value cleanup.
 `adminSetActive` passes `active` as a query parameter rather than a body, unlike
 every other PATCH. That is a backend inconsistency, not a client choice.
 
+## api/resultStates
+
+`api/resultStates.ts`. **New in Phase 9.** The nine identification outcomes and
+the instruction a responder should follow for each.
+
+| Export | Kind | Purpose |
+|---|---|---|
+| `ResultTone` | type | `"go" \| "decide" \| "lookAgain" \| "retake" \| "neutral"`. Mapped onto the palette by `StatusBadge`. |
+| `ResultState` | interface | `{ badge: StringKey, next: StringKey, tone: ResultTone }`. |
+| `RESULT_STATES` | `Record<IdentifyStatus, ResultState>` | The map. Keyed on `IdentifyStatus`. |
+| `analyticsBadge` | function | Resolves an `AnalyticsStatus`, including the `unknown` member a report bucket can carry. Returns `null` only if called with something outside the union. |
+| `RESULT_STATE_ORDER` | readonly tuple | The same nine in the order a responder meets them, for exercising every branch. |
+
+This is what makes Phase 9's "every result state reachable, each with a working
+next action" true **by construction** rather than by review. Keying on
+`IdentifyStatus` means the compiler rejects a state added to the pipeline with
+no responder instruction here.
+
+`analyticsBadge` is deliberately separate rather than folded into
+`RESULT_STATES`. Folding `unknown` in would mean either weakening the key type
+to a string - giving up the exhaustiveness that is the entire value of the table
+- or special-casing inside a map whose guarantee is that it cannot need one. An
+analytics row describes a bucket in a report, not something a responder is
+looking at, so it gets a neutral tone and no instruction.
+
+Two things are deliberately **not** in the table:
+
+- **Severity.** Colour is not information. A responder deciding whether to act
+  should be reading the instruction, not judging an amber swatch, and tone is
+  the channel that fails hardest for colour-blind users and in sunlight.
+- **Confidence.** `NO_FACE` and `MULTIPLE_FACES` have no score at all, so a
+  percentage beside a photo with no usable face would be a lie of omission.
+
+Asserted from pytest by
+`test_every_identification_state_has_a_badge_and_a_next_action`,
+`test_no_two_result_states_share_the_same_badge_text` and
+`test_result_state_keys_exist_in_both_languages`, which parse this file
+textually - the suite has no node runner, and the properties under test are
+exactly what is written in the source.
+
 ## api/types
 
 `api/types.ts`. 31 interfaces mirroring the Pydantic schemas.
