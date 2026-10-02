@@ -92,6 +92,8 @@ export const en = {
   "auth.demo.body": "Tap an account to fill the form. Password: {password}",
   "auth.passwordRule": "At least 8 characters, with one capital letter and one number.",
   "auth.passwordOk": "Password looks good",
+  "auth.session.unreachable":
+    "We could not reach the server to check your sign-in. You are still signed in.",
 
   "emergency.intro.title": "Is someone unresponsive?",
   "emergency.intro.body":
@@ -332,6 +334,8 @@ export const ta: Record<StringKey, string> = {
   "auth.passwordRule":
     "குறைந்தது 8 எழுத்துகள், ஒரு பெரிய எழுத்து மற்றும் ஒரு எண் இருக்க வேண்டும்.",
   "auth.passwordOk": "கடவுச்சொல் சரியாக உள்ளது",
+  "auth.session.unreachable":
+    "உங்கள் உள்நுழவை சரிபார்க்க சேவையத்தை அணுக முடியவில்லை. நீங்கள் இன்னும் உள்நுழ்ந்திருக்கிறீர்கள்.",
 
   "emergency.intro.title": "யாரோடு செயலில்லையா?",
   "emergency.intro.body":

@@ -1,4 +1,4 @@
-﻿"""Contract tests for the values the frontend hardcodes.
+"""Contract tests for the values the frontend hardcodes.
 
 The backend does not change to suit the client, and the client has no test
 runner, so nothing on the frontend side would have caught a literal drifting
@@ -325,3 +325,217 @@ def test_emergency_mode_does_not_clear_the_account_token():
             )
 
 
+# --- Phase 8: the four auth states ------------------------------------------
+
+
+def test_auth_context_declares_four_distinct_states():
+    """`loading`, `authenticated`, `unauthenticated` and `error` must all exist.
+
+    A boolean is the defect. `error` is the state that keeps a dropped
+    connection from rendering as a logout, and it is the one that gets dropped
+    when someone simplifies the type.
+    """
+    source = read("context", "AuthContext.tsx")
+    union = re.search(r"type\s+AuthStatus\s*=(.*?);", source, re.S)
+    assert union, "AuthContext must declare an explicit AuthStatus union"
+    for state in ("loading", "authenticated", "unauthenticated", "error"):
+        assert f'"{state}"' in union.group(1), f"AuthStatus is missing {state!r}"
+
+
+def test_a_transient_auth_failure_never_redirects_to_login():
+    """The Phase 8 gate: a network failure shows a retry, not a logged-out screen.
+
+    This is the defect that produced the reported complaint in the first place,
+    in its subtlest form. `AuthContext` was already correct - it moved to `error`
+    and kept the tokens - and the guard threw that away by testing
+    `!isAuthed`, which is true in the `error` state too.
+    """
+    guards = read("components", "Guards.tsx")
+    assert 'status === "error"' in guards, (
+        "Guards.tsx must branch on the transient error state explicitly"
+    )
+    assert "refreshUser" in guards, "the transient state must offer a retry"
+    assert "common.retry" in guards, "the retry must be a real, labelled control"
+
+    # The navigation must be unreachable from the error branch. Asserted by
+    # position: the only Navigate calls sit after the error branch returns.
+    error_at = guards.index('status === "error"')
+    for nav in re.finditer(r"<Navigate", guards):
+        assert nav.start() > error_at, (
+            "a Navigate must not be reachable from the transient-error branch"
+        )
+
+
+def test_the_guards_render_no_hardcoded_english():
+    """Phase 9 item 3 names `Guards.tsx` explicitly."""
+    guards = read("components", "Guards.tsx")
+    assert "useI18n" in guards
+    text = re.sub(r"//.*|/\*[\s\S]*?\*/", "", guards)
+    assert "Loading" not in text, "Guards.tsx must not hardcode user-visible English"
+    assert "Try again" not in text
+
+
+# --- simulation disclosure -------------------------------------------------
+
+
+def test_engine_mode_is_disclosed_on_every_result(client, demo_headers):
+    """A simulation must never be presentable as a biometric.
+
+    Asserted on the wire, not on the client source, because the disclosure is a
+    property of the response a responder actually receives. The API reports
+    `engine_mode`, `demo_mode` and `algo_version` on every result; the client
+    type keeps all three, and the result screen renders them above the
+    confidence bar.
+    """
+    r = client.post(
+        "/api/emergency/start", json={"access_type": "public"}, headers=demo_headers
+    )
+    assert r.status_code == 200
+    session = r.json()
+
+    from tests.conftest import degraded_image
+
+    identify = client.post(
+        f"/api/emergency/{session['session_id']}/identify",
+        headers={
+            "X-TRAYA-Session-Token": session["session_token"],
+            **demo_headers,
+        },
+        json={"image": degraded_image("aarav-kumar-demo", faces=2)},
+    )
+    assert identify.status_code == 200
+    body = identify.json()
+
+    # Present even on the cheapest path (multi-face rejection returns early,
+    # before any scoring), so it cannot be omitted by a future early return.
+    assert body["engine_mode"] == "simulation", (
+        "the current engine must self-report as the simulation it is"
+    )
+    assert body["demo_mode"] is True
+    assert body["algo_version"], "a score must be traceable to the engine build"
+
+
+def test_result_screen_renders_the_disclosure():
+    """The client must keep the fields and show them, not merely receive them."""
+    source = read("api", "types.ts")
+    for field in ("engine_mode", "demo_mode", "algo_version"):
+        assert field in source, f"IdentifyResult must expose {field}"
+    hub = read("pages", "EmergencyHub.tsx")
+    assert "engine_mode" in hub, (
+        "the result screen must surface which engine produced the match"
+    )
+    assert "Simulated match" in hub, (
+        "a simulated result must say so in plain words, not only in a field name"
+    )
+
+
+# --- design-system traps ---------------------------------------------------
+
+#: Any numbered Tailwind colour outside the ramp. The theme is monochrome plus
+#: three semantic hues, so `text-slate-400` and `bg-amber-500/15` cannot
+#: resolve to anything and emit no CSS at all.
+OFF_RAMP = re.compile(
+    r"(?<![\w-])(?:bg|text|border|ring|from|to|via|divide|placeholder|fill|stroke|shadow|"
+    r"outline|decoration|accent|caret)-(?:ink|slate|amber|emerald|zinc|neutral|stone|red|"
+    r"green|blue|yellow|orange|purple|pink|gray|grey|white|black)-\d{2,3}(?![\w-])"
+)
+
+
+def _off_ramp_offenders(extensions: tuple[str, ...]) -> dict[str, list[str]]:
+    offenders: dict[str, list[str]] = {}
+    for ext in extensions:
+        for path in sorted(FRONTEND.rglob(f"*{ext}")):
+            found = sorted(set(OFF_RAMP.findall(path.read_text(encoding="utf-8"))))
+            if found:
+                offenders[path.relative_to(FRONTEND).as_posix()] = found
+    return offenders
+
+
+def test_no_component_uses_an_off_ramp_colour():
+    """Every colour in a component must come from the semantic ramp.
+
+    The failure is silent by construction: an unknown colour class is not an
+    error to Tailwind, it is simply absent from the stylesheet. That is how six
+    pages ended up rendering with no background on their cards, no tint on any
+    status badge, and no visible border anywhere. A test is the only thing that
+    can catch a class that does not exist.
+    """
+    offenders = _off_ramp_offenders((".tsx",))
+    assert not offenders, (
+        "colour utilities outside the ramp:\n" + json.dumps(offenders, indent=2)
+    )
+
+
+def test_class_strings_do_not_contain_off_ramp_colours():
+    """The same rule for class strings held in data, not in JSX.
+
+    `utils/format.ts` builds the status badge tints as strings in a lookup
+    table, so a component-level scan cannot see them. Three of those classes
+    were invented and had never rendered.
+    """
+    offenders = _off_ramp_offenders((".ts",))
+    assert not offenders, (
+        "off-ramp colours in class strings:\n" + json.dumps(offenders, indent=2)
+    )
+
+
+def test_every_opacity_modifier_on_a_ramp_colour_resolves():
+    """`<alpha-value>` must be present in the tailwind colour definitions.
+
+    This is the mechanism behind the whole bug: a colour declared as a bare
+    `var(--c-danger)` builds fine, but `bg-danger/10` then produces no rule, so
+    the app bar and tab bar ended up with no background and content scrolled
+    visibly underneath both. Asserted against the config and the stylesheet so
+    the tokens cannot silently regress.
+    """
+    config = (FRONTEND_ROOT / "tailwind.config.js").read_text(encoding="utf-8")
+    assert "<alpha-value>" in config, (
+        "ramp colours must contain <alpha-value> or every opacity modifier "
+        "compiles to nothing"
+    )
+    css = (FRONTEND / "index.css").read_text(encoding="utf-8")
+    names = re.findall(r'"([a-z-]+)",', config.split("].map")[0])
+    for name in names:
+        assert f"--c-{name}-rgb:" in css, f"--c-{name}-rgb is missing from index.css"
+
+
+def test_spacing_uses_only_values_in_the_theme_table():
+    """`theme.spacing` is `replace`, not `extend`, so gaps are unvalidated.
+
+    `mt-5.5` and `mt-13` are not errors; they compile to nothing, exactly like
+    an unknown colour. Asserted on the table in the config so a new page cannot
+    reintroduce the silent failure.
+    """
+    config = (FRONTEND_ROOT / "tailwind.config.js").read_text(encoding="utf-8")
+    table = re.search(r"spacing:\s*\{(.*?)\n    \}", config, re.S)
+    assert table, "tailwind.config.js must declare a spacing table"
+    allowed = set(re.findall(r"^\s*[\"']?([\w.-]+)[\"']?:", table.group(1), re.M))
+    bad: dict[str, list[str]] = {}
+    # `translate` is here because that is where the failure actually landed:
+    # `-translate-x-5.5` compiled to nothing and the theme toggle knob never
+    # visibly moved. The earlier version of this pattern omitted `translate`, so
+    # it could not have caught the bug it was written for.
+    pattern = re.compile(
+        r"(?<![\w-])(?:m|p|gap|space-[xy]|w|h|top|left|right|bottom|inset"
+        r"|translate-[xy]|scroll-m[xy]|scroll-mt|scroll-mb)-(\d+(?:\.\d+)?)(?![\w-])"
+    )
+    for path in sorted(FRONTEND.rglob("*.tsx")):
+        text = _strip_comments(path.read_text(encoding="utf-8"))
+        used = {u for u in pattern.findall(text) if u not in allowed and u != "0"}
+        if used:
+            bad[path.relative_to(FRONTEND).as_posix()] = sorted(used)
+    assert not bad, (
+        "spacing values outside theme.spacing (they compile to nothing):\n"
+        + json.dumps(bad, indent=2)
+    )
+
+
+def _strip_comments(text: str) -> str:
+    """Drop `//` and `/* */` comments before scanning a source file.
+
+    Both this module and index.css now explain these traps in prose, and a
+    pattern that matches `5.5` inside a comment fails on the documentation of
+    its own bug.
+    """
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"^\s*//[^\n]*$", "", text, flags=re.M)
