@@ -3,13 +3,21 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { ApiError } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { useI18n } from "../i18n";
+import { useI18n, type StringKey } from "../i18n";
 import { AlertIcon } from "../components/icons";
 
-const DEMO_ACCOUNTS = [
-  { email: "aarav.kumar@demo.traya", label: "Registered person" },
-  { email: "neha.rao@responder.traya", label: "Medical responder" },
-  { email: "admin@traya.io", label: "Administrator" },
+/**
+ * Demo sign-in shortcuts.
+ *
+ * `labelKey` rather than `label`: the role each account demonstrates is copy,
+ * and the demo panel is reachable from the login screen in both languages. The
+ * emails and the shared password are credentials, not prose, so they stay as
+ * literals - a translated credential would be a different credential.
+ */
+const DEMO_ACCOUNTS: { email: string; labelKey: StringKey }[] = [
+  { email: "aarav.kumar@demo.traya", labelKey: "auth.demo.role.person" },
+  { email: "neha.rao@responder.traya", labelKey: "auth.demo.role.responder" },
+  { email: "admin@traya.io", labelKey: "auth.demo.role.admin" },
 ];
 const DEMO_PASSWORD = "TrayaDemo#2026";
 
@@ -116,13 +124,13 @@ export function Login() {
             >
               <span className="min-w-0">
                 <span className="block truncate text-sm font-medium">
-                  {account.label}
+                  {t(account.labelKey)}
                 </span>
                 <span className="block truncate text-xs text-faint">
                   {account.email}
                 </span>
               </span>
-              <span className="shrink-0 text-xs text-muted">Fill</span>
+              <span className="shrink-0 text-xs text-muted">{t("auth.demo.fill")}</span>
             </button>
           ))}
         </div>

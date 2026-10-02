@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { api, ApiError } from "../api/client";
 import type { AdminUser, Analytics, AuditLog, HospitalAdmin, Role, Setting } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
+import { useI18n, type StringKey } from "../i18n";
 
 /**
  * The assignable roles, in the order they should read on screen.
@@ -26,6 +27,7 @@ const ROLES: readonly Role[] = [
 type Tab = "analytics" | "users" | "settings" | "hospitals" | "audit";
 
 export function Admin() {
+  const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("analytics");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -36,22 +38,23 @@ export function Admin() {
   const [hospitals, setHospitals] = useState<HospitalAdmin[]>([]);
   const [audit, setAudit] = useState<AuditLog[]>([]);
 
-  const onTab = (t: Tab) => {
-    setTab(t);
+  const fail = (err: unknown) =>
+    setError(err instanceof ApiError ? err.detail : t("error.generic"));
+
+  const onTab = (next: Tab) => {
+    setTab(next);
     setError(null);
-    if (t === "analytics") api.adminAnalytics().then(setAnalytics).catch(fail);
-    if (t === "users") api.adminUsers().then(setUsers).catch(fail);
-    if (t === "settings") api.adminSettings().then(setSettings).catch(fail);
-    if (t === "hospitals") api.adminHospitals().then(setHospitals).catch(fail);
-    if (t === "audit") api.adminAudit().then(setAudit).catch(fail);
+    if (next === "analytics") api.adminAnalytics().then(setAnalytics).catch(fail);
+    if (next === "users") api.adminUsers().then(setUsers).catch(fail);
+    if (next === "settings") api.adminSettings().then(setSettings).catch(fail);
+    if (next === "hospitals") api.adminHospitals().then(setHospitals).catch(fail);
+    if (next === "audit") api.adminAudit().then(setAudit).catch(fail);
   };
 
   useEffect(() => {
     onTab("analytics");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const fail = (err: unknown) => setError(err instanceof ApiError ? err.detail : "Request failed.");
 
   const setRoles = async (user: AdminUser, roles: string[]) => {
     setBusy(true);
@@ -116,21 +119,24 @@ export function Admin() {
     }
   };
 
-  const tabs: { key: Tab; label: string }[] = [
-    { key: "analytics", label: "Analytics" },
-    { key: "users", label: "Users" },
-    { key: "settings", label: "Settings" },
-    { key: "hospitals", label: "Hospitals" },
-    { key: "audit", label: "Audit log" },
+  const tabs: { key: Tab; labelKey: StringKey }[] = [
+    { key: "analytics", labelKey: "admin.tab.analytics" },
+    { key: "users", labelKey: "admin.tab.users" },
+    { key: "settings", labelKey: "admin.tab.settings" },
+    { key: "hospitals", labelKey: "admin.tab.hospitals" },
+    { key: "audit", labelKey: "admin.tab.audit" },
   ];
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10">
-      <h1 className="text-3xl font-bold text-text">Admin console</h1>
-      <p className="mt-1 text-sm text-muted">Platform analytics, user management and configuration.</p>
+      <h1 className="text-3xl font-bold text-text">{t("admin.console.title")}</h1>
+      <p className="mt-1 text-sm text-muted">{t("admin.console.subtitle")}</p>
 
       {error && (
-        <div className="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
+        <div
+          role="alert"
+          className="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger"
+        >
           {error}
         </div>
       )}
@@ -139,15 +145,15 @@ export function Admin() {
           scrollbar and bleeds to the screen edge. `tap` because these tabs are
           32px tall otherwise. */}
       <div className="scroll-x mt-6 border-b border-line">
-        {tabs.map((t) => (
+        {tabs.map((entry) => (
           <button
-            key={t.key}
-            onClick={() => onTab(t.key)}
+            key={entry.key}
+            onClick={() => onTab(entry.key)}
             className={`tap whitespace-nowrap rounded-t-lg px-4 py-2 text-sm font-medium ${
-              tab === t.key ? "border-b-2 border-accent text-accent" : "text-muted hover:text-text"
+              tab === entry.key ? "border-b-2 border-accent text-accent" : "text-muted hover:text-text"
             }`}
           >
-            {t.label}
+            {t(entry.labelKey)}
           </button>
         ))}
       </div>
@@ -156,16 +162,19 @@ export function Admin() {
         {tab === "analytics" && analytics && (
           <div className="space-y-6">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <Stat label="Users" value={analytics.total_users} />
-              <Stat label="Enrolled" value={analytics.total_enrolled} />
-              <Stat label="Sessions" value={analytics.total_sessions} />
-              <Stat label="Identification rate" value={`${Math.round(analytics.identification_rate * 100)}%`} />
+              <Stat labelKey="admin.stat.users" value={analytics.total_users} />
+              <Stat labelKey="admin.stat.enrolled" value={analytics.total_enrolled} />
+              <Stat labelKey="admin.stat.sessions" value={analytics.total_sessions} />
+              <Stat
+                labelKey="admin.stat.identificationRate"
+                value={`${Math.round(analytics.identification_rate * 100)}%`}
+              />
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="card">
-                <h3 className="mb-3 font-semibold text-text">Identifications by day</h3>
+                <h3 className="mb-3 font-semibold text-text">{t("admin.analytics.byDay")}</h3>
                 {analytics.identifications_by_day.length === 0 ? (
-                  <p className="text-sm text-faint">No data yet.</p>
+                  <p className="text-sm text-faint">{t("admin.analytics.noData")}</p>
                 ) : (
                   <ul className="space-y-2">
                     {analytics.identifications_by_day.map((d) => (
@@ -178,7 +187,7 @@ export function Admin() {
                 )}
               </div>
               <div className="card">
-                <h3 className="mb-3 font-semibold text-text">Outcomes</h3>
+                <h3 className="mb-3 font-semibold text-text">{t("admin.analytics.outcomes")}</h3>
                 {analytics.status_breakdown.map((s) => (
                   <div key={s.status} className="flex items-center justify-between py-1 text-sm">
                     <StatusBadge status={s.status} />
@@ -192,23 +201,34 @@ export function Admin() {
 
         {tab === "users" && (
           <div className="card">
-            <h2 className="mb-4 font-semibold text-text">Users ({users.length})</h2>
+            <h2 className="mb-4 font-semibold text-text">
+              {t("admin.users.heading", { count: users.length })}
+            </h2>
             <div className="space-y-3">
               {users.map((u) => (
                 <div key={u.id} className="rounded-lg border border-line bg-surface p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                       <p className="text-sm font-medium text-text">
-                        {u.full_name} {u.is_demo && <span className="badge ml-2 bg-raised text-muted">demo</span>}
+                        {u.full_name}{" "}
+                        {u.is_demo && (
+                          <span className="badge ml-2 bg-raised text-muted">{t("common.demoTag")}</span>
+                        )}
                       </p>
                       <p className="text-xs text-faint">{u.email} · {u.id.slice(0, 12)}…</p>
                     </div>
+                    {/*
+                      The state and the action are one control, so they are one
+                      string: rendering "active" alone would tell an admin what is
+                      true without telling them what pressing it does.
+                    */}
                     <button
                       onClick={() => setActive(u, !u.is_active)}
                       className={`badge border ${u.is_active ? "bg-ok/15 text-ok" : "bg-danger/15 text-danger"}`}
                       disabled={busy}
                     >
-                      {u.is_active ? "active" : "disabled"} — click to toggle
+                      {u.is_active ? t("admin.user.active") : t("admin.user.disabled")}{" "}
+                      <span className="opacity-80">— {t("admin.user.toggle")}</span>
                     </button>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -228,7 +248,7 @@ export function Admin() {
                         }`}
                         disabled={busy}
                       >
-                        {r.replace(/_/g, " ")}
+                        {t(ROLE_LABELS[r])}
                       </button>
                     ))}
                   </div>
@@ -240,7 +260,13 @@ export function Admin() {
 
         {tab === "settings" && (
           <div className="card">
-            <h2 className="mb-4 font-semibold text-text">Runtime settings</h2>
+            <h2 className="mb-4 font-semibold text-text">{t("admin.settings.heading")}</h2>
+            {/*
+              The key and its description come from the backend's seeded
+              `system_settings` rows, so they render as data. The rows are
+              editable in place, which is why this tab has no static copy of its
+              own beyond the heading.
+            */}
             <ul className="space-y-2">
               {settings.map((s) => (
                 <li key={s.key} className="rounded-lg border border-line bg-surface p-3">
@@ -264,7 +290,9 @@ export function Admin() {
         {tab === "hospitals" && (
           <div className="grid gap-6 lg:grid-cols-2">
             <div className="card">
-              <h2 className="mb-4 font-semibold text-text">Registered hospitals ({hospitals.length})</h2>
+              <h2 className="mb-4 font-semibold text-text">
+                {t("admin.hospitals.heading", { count: hospitals.length })}
+              </h2>
               <ul className="space-y-2">
                 {hospitals.map((h) => (
                   <li key={h.id} className="rounded-lg border border-line bg-surface p-3">
@@ -276,10 +304,10 @@ export function Admin() {
                       </div>
                       <div className="flex flex-col gap-1 text-right">
                         <span className={`badge ${h.emergency_available ? "bg-ok/15 text-ok" : "bg-raised text-muted"}`}>
-                          {h.emergency_available ? "emergency" : "non-emergency"}
+                          {h.emergency_available ? t("admin.hospital.emergency") : t("admin.hospital.nonEmergency")}
                         </span>
                         <span className={`badge ${h.availability_verified ? "bg-accent/15 text-accent" : "bg-warn/15 text-warn"}`}>
-                          {h.availability_verified ? "verified" : "unverified"}
+                          {h.availability_verified ? t("admin.hospital.verified") : t("admin.hospital.unverified")}
                         </span>
                       </div>
                     </div>
@@ -289,32 +317,39 @@ export function Admin() {
             </div>
 
             <form onSubmit={addHospital} className="card h-fit space-y-3">
-              <h2 className="font-semibold text-text">Add hospital</h2>
-              <input name="name" className="input" placeholder="Name" required />
-              <input name="address" className="input" placeholder="Address" />
+              <h2 className="font-semibold text-text">{t("admin.hospital.form.title")}</h2>
+              <label className="sr-only" htmlFor="hospital-name">{t("admin.hospital.field.name")}</label>
+              <input id="hospital-name" name="name" className="input" placeholder={t("admin.hospital.field.name")} required />
+              <label className="sr-only" htmlFor="hospital-address">{t("admin.hospital.field.address")}</label>
+              <input id="hospital-address" name="address" className="input" placeholder={t("admin.hospital.field.address")} />
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <input name="latitude" className="input" placeholder="Latitude" type="number" step="0.0001" />
-                <input name="longitude" className="input" placeholder="Longitude" type="number" step="0.0001" />
+                <label className="sr-only" htmlFor="hospital-lat">{t("admin.hospital.field.latitude")}</label>
+                <input id="hospital-lat" name="latitude" className="input" placeholder={t("admin.hospital.field.latitude")} type="number" step="0.0001" />
+                <label className="sr-only" htmlFor="hospital-lng">{t("admin.hospital.field.longitude")}</label>
+                <input id="hospital-lng" name="longitude" className="input" placeholder={t("admin.hospital.field.longitude")} type="number" step="0.0001" />
               </div>
-              <input name="phone" className="input" placeholder="Phone" />
+              <label className="sr-only" htmlFor="hospital-phone">{t("admin.hospital.field.phone")}</label>
+              <input id="hospital-phone" name="phone" className="input" placeholder={t("admin.hospital.field.phone")} />
               <div className="flex gap-4">
                 <label className="flex items-center gap-1.5 text-sm text-muted">
                   <input type="checkbox" name="emergency" className="accent-accent" defaultChecked />
-                  Emergency dept
+                  {t("admin.hospital.field.emergencyDept")}
                 </label>
                 <label className="flex items-center gap-1.5 text-sm text-muted">
                   <input type="checkbox" name="verified" className="accent-accent" defaultChecked />
-                  Availability verified
+                  {t("admin.hospital.field.verified")}
                 </label>
               </div>
-              <button className="btn-primary w-full" disabled={busy}>Add hospital</button>
+              <button className="btn-primary w-full" disabled={busy}>{t("admin.hospital.form.submit")}</button>
             </form>
           </div>
         )}
 
         {tab === "audit" && (
           <div className="card">
-            <h2 className="mb-4 font-semibold text-text">Audit log ({audit.length})</h2>
+            <h2 className="mb-4 font-semibold text-text">
+              {t("admin.audit.heading", { count: audit.length })}
+            </h2>
             <ul className="max-h-[60vh] space-y-2 overflow-y-auto">
               {audit.map((a) => (
                 <li key={a.id} className="rounded-lg border border-line bg-surface p-3">
@@ -340,10 +375,29 @@ export function Admin() {
   );
 }
 
-function Stat({ label, value }: { label: string; value: number | string }) {
+/**
+ * Role names for the assignment toggles.
+ *
+ * The slug is a backend contract and must not be translated; the label shown
+ * beside it is copy. Typed as a total map over `Role` so adding a role to the
+ * seed without adding a label is a typecheck failure rather than a raw slug
+ * appearing in the console.
+ */
+const ROLE_LABELS: Record<Role, StringKey> = {
+  public: "role.public",
+  registered_user: "role.registered_user",
+  medical_responder: "role.medical_responder",
+  police_responder: "role.police_responder",
+  hospital: "role.hospital",
+  auditor: "role.auditor",
+  admin: "role.admin",
+};
+
+function Stat({ labelKey, value }: { labelKey: StringKey; value: number | string }) {
+  const { t } = useI18n();
   return (
     <div className="card">
-      <p className="text-xs uppercase tracking-wide text-faint">{label}</p>
+      <p className="text-xs uppercase tracking-wide text-faint">{t(labelKey)}</p>
       <p className="mt-1 text-2xl font-bold text-text">{value}</p>
     </div>
   );

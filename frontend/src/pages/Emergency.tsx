@@ -7,7 +7,7 @@ import { QualityPanel } from "../components/QualityPanel";
 import { AlertIcon, CameraIcon, PulseIcon } from "../components/icons";
 import { useEmergency } from "../context/EmergencyContext";
 import { useI18n } from "../i18n";
-import { fileToBase64, useCamera } from "../hooks/useCamera";
+import { fileToBase64, useCamera, CAMERA_ERROR_KEYS } from "../hooks/useCamera";
 
 type Stage = "intro" | "capture" | "review" | "working";
 
@@ -65,11 +65,15 @@ export function Emergency() {
 
   async function shoot() {
     const shot = await camera.capture();
-    if (!shot) {
-      setError(t("emergency.camera.error"));
+    // The hook reports *why* it failed rather than returning null, so the
+    // message can tell the responder whether to retry or to pick a photo from
+    // the gallery instead. Collapsing both into one string is what used to
+    // happen here.
+    if (!shot.ok) {
+      setError(t(CAMERA_ERROR_KEYS[shot.error]));
       return;
     }
-    setImageB64(shot);
+    setImageB64(shot.data);
     camera.stop();
     setStage("review");
   }
@@ -181,7 +185,7 @@ export function Emergency() {
               // comment - Tailwind's scanner does not strip comments, so naming a
               // utility here emits a rule for it.
               <div className="absolute inset-x-0 bottom-0 bg-danger/90 p-3 text-center text-sm text-accent-fg">
-                {camera.error}
+                {t(CAMERA_ERROR_KEYS[camera.error])}
               </div>
             )}
           </div>

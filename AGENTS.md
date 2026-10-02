@@ -129,8 +129,8 @@ commands in [docs/AUDIT.md](docs/AUDIT.md).
 
 | Fact | Value |
 |---|---|
-| Backend tests | **409 passed, 0 skipped** on real Postgres; **380 passed + 29 skipped** on SQLite |
-| Backend tests on real Postgres | **409 passed, 0 skipped**, ~171s. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
+| Backend tests | **414 passed, 0 skipped** on real Postgres; **385 passed + 29 skipped** on SQLite |
+| Backend tests on real Postgres | **414 passed, 0 skipped**, ~125s. Runs in a throwaway `traya_test` schema, **never `public`** — `TRAYA_TEST_DATABASE_URL` — see [operations/README.md](docs/operations/README.md#testing) |
 | Hosted Supabase | **Live and verified.** PostgreSQL 17.11, 23 tables, RLS on 23/23 with 19 policies, 7 roles / 18 permissions, emergency flow HIGH_CONFIDENCE 0.995 |
 | Frontend typecheck | **passes**, exit 0, strict TS |
 | `npm run docs:check` | **passes**, 31 pages |
@@ -173,15 +173,18 @@ remain unusable on Python 3.14.2 without a compiler. ArcFace-512D would score
 higher and is **rejected because the 128D requirement is explicit**; it must
 still be measured and recorded, not dismissed.
 
-### The bugs that will bite you
+### The bugs that will bite you — all five were fixed in Phase 1
 
-Ranked in [docs/AUDIT.md](docs/AUDIT.md#bugs-ranked). The five that matter:
+Ranked in [docs/AUDIT.md](docs/AUDIT.md#bugs-ranked). These were the five that
+mattered, kept here because the shape of each one recurs. **All five are fixed;
+do not re-report them — the fixed list is in §7.** The present-tense description
+below is the original defect, not the current state.
 
 1. **The emergency flow 403s and cannot complete.** The backend issues a
    `session_token` (`emergency.py:180`) and requires it as an
    `X-TRAYA-Session-Token` header (`emergency.py:57-58`). The frontend has **no
    `session_token` field in its types** and never sends the header. Step 1
-   returns 200, every step after returns 403. The product does not work.
+   returns 200, every step after returns 403. The product did not work.
 2. **The Match Result tab can never render.** `Emergency.tsx:82` passes the
    result via router `state`; `EmergencyHub.tsx:26` reads `EmergencyContext` and
    never calls `useLocation()`. `setSession` has zero call sites.
@@ -257,8 +260,18 @@ Ranked in [docs/AUDIT.md](docs/AUDIT.md#bugs-ranked). The five that matter:
     pages in `<Route element={<Layout />}>`.
 17. **`EmergencyContext` is a guarded `JSON.parse`** against `sessionStorage`.
     Keep the guard.
-18. **Every user-visible string is an i18n key.** Five pages still hardcode
-    English (see the gap list in §7).
+18. **Every user-visible string is an i18n key, and that is now enforced.**
+    Phase 9 closed the last five pages, so no page hardcodes English.
+    `test_no_page_or_component_hardcodes_user_visible_english` fails the build
+    when a literal appears in a `.tsx` page or component. Its exclusions are
+    **named** (`Escape`, arrow-key names, `.querySelector`, the demo password),
+    not pattern-matched loosely, because the loose version passed two of the
+    three English strings that actually shipped. When you add an exclusion, add
+    it with the reason and re-run the mutation check described in §7.
+    A hook that produces user-visible text must expose a **code**, not a string:
+    `useCamera` and `useGeolocation` both return codes mapped through
+    `CAMERA_ERROR_KEYS` / `GEO_ERROR_KEYS`, because a hook returning English is
+    English the Tamil UI cannot avoid.
 18a. **Never write a user-visible string through a shell pipeline.** The
     i18n catalogues moved to `i18n/locales/*.json` in Phase 9 for exactly this
     reason: `hub.engine.simulationTitle` and `hub.engine.simulationBody` were
@@ -277,6 +290,25 @@ Ranked in [docs/AUDIT.md](docs/AUDIT.md#bugs-ranked). The five that matter:
     direction — check codepoints, not the screen. And an interpolation token
     (`{mode}`, `{total}`) is legitimately Latin inside a Tamil value, so a
     "no Latin in Tamil" rule must exempt `\{[a-z]+\}`.
+
+18b. **A hook that returned `null` for a failed capture was a silent failure.**
+    `useCamera.capture` returned `Promise<string | null>` and both call sites
+    treated `null` as "nothing to report", so a failed capture showed no message
+    at all — the button simply stopped working. It now returns a discriminated
+    `CaptureResult`, so `ok: false` cannot be dropped. If you add a hook that can
+    fail, return a result object, not `null`.
+
+18c. **A scanner is only as good as its weakest assumption, so mutation-check
+    every exclusion.** The Tamil-catalogue guard has three rules beyond the
+    encoding signature: no foreign script, no digit adjacent to Tamil, no
+    untranslated Latin. Each one was verified by reinstating the exact string
+    that broke it and confirming the build fails. Two exclusions are named
+    rather than pattern-based for a concrete reason: `e.g.` opens with a dotted
+    token that reads as member access, and `e.g. penicillin, peanuts` yields the
+    words `e` and `g`, which a "bare lowercase words are an enum" rule eats. That
+    placeholder shape is what actually shipped on the profile form, so the rule
+    requires `len >= 3` or an underscore, and `e.g`/`i.e` are excluded from the
+    member-access check by name.
 
 ### Backend architecture
 
@@ -423,7 +455,7 @@ C:\Traya\
         medical, notification, location, hospital, audit_service
       main.py                app factory, lifespan, health, SPA serving
     migrations\              Alembic (4 versions)
-    tests\                   pytest, 403 tests on Postgres / 374 + 29 skipped on SQLite
+    tests\                   pytest, 414 tests on Postgres / 385 + 29 skipped on SQLite
     scripts\                 inspect_hosted_rls.py, apply_and_verify_hosted_rls.py,
                              verify_hosted_app.py — all read database state, none
                              deploy schema
@@ -435,7 +467,7 @@ C:\Traya\
       context\               AuthContext, EmergencyContext
       hooks\                 useCamera, useGeolocation
       api\                   client.ts (the only network boundary), types.ts
-      i18n\                  locales/en.json + ta.json — 287 keys each, UTF-8 no BOM;
+      i18n\                  locales/en.json + ta.json – 440 keys each, UTF-8 no BOM;
                              strings.ts is a typed re-export over them
       theme\                 ThemeProvider
   docs\                      31 pages — see §6
@@ -571,18 +603,24 @@ diagnostic an unexplained 422 has). Details in
    tables, 7 roles / 18 permissions, emergency flow verified at 0.995. What is
    still open: deleting the local `traya.db` is deliberately undone, and
    **bucket retention policies** are dashboard work with no portable SQL.
-4. **Five pages still hardcode English**: `EmergencyHub`, `Profile`, `Admin`,
-   `Demo`, `Privacy`. Their colours are migrated; their strings are not.
-5. **The i18n catalogue is now 287 keys each in JSON, and Phase 9 has consumed
-   the `hub.*` and `analytics.*` namespaces plus the whole `result.*` set.**
-   `EmergencyHub` was rewritten in Phase 9 and no longer hardcodes English. What
-   is still unwired: `Profile`, `Admin`, `Demo` and `Privacy` still hardcode
-   English, `useCamera`/`useGeolocation` still return raw English error strings,
-   and the `medical`, `profile`, `admin`, `emergency`, `contact`, `location` and
-   `dashboard` namespaces still carry keys no page renders. `Privacy` does not
-   use its own namespace at all. `test_both_catalogues_carry_identical_keys`
-   asserts the two catalogues are identical in shape, so a gap is a page that
-   does not call `t()`, not a missing key.
+4. ~~**Five pages still hardcode English.**~~ **Fixed in Phase 9** — do not
+   re-report: `EmergencyHub`, `Profile`, `Admin`, `Demo` and `Privacy` all resolve
+   their copy through `t()`, and
+   `test_no_page_or_component_hardcodes_user_visible_english` fails the build if
+   one reintroduces a literal. `Privacy` now renders the `privacy.title` key that
+   had existed and was unused.
+5. **The i18n catalogue is 440 keys each, and Phase 9 consumed the
+   `hub.*`/`analytics.*`/`result.*` namespaces plus `emergency.*`, `contact.*`,
+   `location.*`, `dashboard.*`, `profile.*`, `medical.*`, `admin.*`, `demo.*`
+   and `privacy.*`.** `useCamera`/`useGeolocation` return codes mapped through
+   `CAMERA_ERROR_KEYS`/`GEO_ERROR_KEYS` rather than English.
+   `test_both_catalogues_carry_identical_keys` asserts the two catalogues are
+   identical in shape, so a gap is a page that does not call `t()`, not a missing
+   key. The permanent Tamil guard asserts no foreign script, no digit adjacent to
+   Tamil, and no untranslated Latin, with `TRAYA`, `English`, `SMS`,
+   `Latitude`, `Longitude` and ABO/Rh notation allowed by name.
+   **What it cannot check is meaning**: no native speaker has reviewed the Tamil,
+   so a fluent-but-wrong translation passes every assertion here.
 6. ~~**`backend/.env.example` documents 20 of 36 settings.**~~ **Fixed in Phase
    11** — all 48 are documented, and a test fails the build if one is added
    without a line here. Do not re-report.

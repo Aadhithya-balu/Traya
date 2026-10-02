@@ -11,28 +11,32 @@ covered in [routing.md](routing.md).
 | [`Login`](#login) | `/login` | form | complete |
 | [`Register`](#register) | `/register` | form | complete |
 | [`Emergency`](#emergency) | `/emergency` | 4-stage flow | complete |
-| [`EmergencyHub`](#emergencyhub) | `/emergency/:sessionId` | 5 tabs | **legacy** |
+| [`EmergencyHub`](#emergencyhub) | `/emergency/:sessionId` | 5 tabs | complete |
 | [`Dashboard`](#dashboard) | `/dashboard` | summary | complete |
-| [`Profile`](#profile) | `/profile` | 6 sections | **legacy** |
-| [`Demo`](#demo) | `/demo` | scenarios | **legacy** |
-| [`Admin`](#admin) | `/admin` | 5 tabs | **legacy** |
-| [`Privacy`](#privacy) | `/privacy` | none | **legacy** |
+| [`Profile`](#profile) | `/profile` | 6 sections | complete |
+| [`Demo`](#demo) | `/demo` | scenarios | complete |
+| [`Admin`](#admin) | `/admin` | 5 tabs | complete |
+| [`Privacy`](#privacy) | `/privacy` | none | complete |
 
 **complete** = design tokens, i18n keys, and layout respects the shell.
 **legacy** = colour is migrated but strings are still hardcoded English.
 Phase 1 moved every page off the removed `ink-*`/`slate-*` palette, so
 **colour is no longer what makes a page legacy** — see
 [design-system.md](design-system.md#the-palette-migration-is-done-the-hardcoded-english-is-not).
-What is left is the i18n work, and on `EmergencyHub` and `Profile` that is
-substantial.
 
-| Page | Colour | Strings | Phase 1 also fixed |
+**Phase 9 closed the string half.** Every page now resolves its user-visible
+copy through `t()`, and `test_no_page_or_component_hardcodes_user_visible_english`
+fails the build if one reintroduces a literal. The **legacy** markers below are
+therefore stale for `EmergencyHub`, `Profile`, `Admin`, `Demo` and `Privacy`:
+what remains for those pages is layout and desktop behaviour, not translation.
+
+| Page | Colour | Strings | Also fixed |
 |---|---|---|---|
-| `EmergencyHub` | done | **hardcoded** | result plumbing, GPS source, engine disclosure |
-| `Profile` | done | **hardcoded** | consent + enrolment vocabulary; guided enrolment wired in Phase 6 |
-| `Admin` | done | **hardcoded** | role names |
-| `Demo` | done | **hardcoded** | — |
-| `Privacy` | done | **hardcoded** | invisible headings |
+| `EmergencyHub` | done | done | result plumbing, GPS source, engine disclosure |
+| `Profile` | done | done | consent + enrolment vocabulary; guided enrolment (Phase 6); unlabelled inputs |
+| `Admin` | done | done | role names; `public` role had no label |
+| `Demo` | done | done | simulation disclosure rendered unconditionally |
+| `Privacy` | done | done | invisible headings |
 
 ---
 
@@ -66,7 +70,10 @@ reading the docs. **Those emails duplicate the list in `AGENTS.md` and
 `docs/operations/README.md`** - three sources for one fact. Treat
 [operations/README.md](../operations/README.md#demo-accounts) as canonical.
 
-The panel's own labels are hardcoded English, not i18n keys.
+The panel's own labels are i18n keys (`auth.demo.*`), with `{password}` carried
+as an interpolation rather than concatenated. The password itself stays a
+literal in `DEMO_PASSWORD`, because it is a credential that has to match the
+seed, not copy.
 
 ## Register
 
@@ -124,7 +131,7 @@ Design decisions:
 ## EmergencyHub
 
 `pages/EmergencyHub.tsx` -> `EmergencyHub`. Route: `/emergency/:sessionId`.
-**Legacy, and the largest un-migrated file.** 553 lines, five tabs
+**The largest page in the app.** Five tabs
 (`type Tab = "result" | "medical" | "contact" | "location" | "timeline"`), three
 local sub-components (`MatchResultSection`, `PublicMedicalSummary`,
 `ResponderExtras`), and ten pieces of state.
@@ -133,8 +140,9 @@ Calls: `api.medicalSummary`, `api.responderProfile` (role-gated),
 `api.timeline`, `api.nearbyHospitals`, `api.sendLocation`, `api.contactAction`,
 `api.confirm`, plus `useGeolocation(false)`.
 
-**Both functional bugs are fixed. The remaining problem on this page is that it
-is still legacy in every other respect.**
+**Both functional bugs are fixed, and Phase 9 closed the strings.** The page is
+no longer legacy. What remains is desktop layout and breakpoint behaviour, which
+is unverified — no browser run has happened.
 
 1. ~~**The Match Result tab renders nothing.**~~ `Emergency.tsx` now calls
    `setSession` and `setResult` after `identify`, and navigates without a
@@ -188,7 +196,7 @@ endpoints**. Harmless, but it should depend on nothing instead.
 
 ## Profile
 
-`pages/Profile.tsx` -> `Profile`. Route: `/profile`, behind `Protected`. **Legacy.**
+`pages/Profile.tsx` -> `Profile`. Route: `/profile`, behind `Protected`.
 
 Six sections: basic info, medical profile, emergency contacts (add/remove),
 visible features (add/remove), biometric consent grant/withdraw, and biometric
@@ -199,22 +207,32 @@ Twelve calls: `getMedical`, `listContacts`, `listFeatures`, `listConsents`,
 `deleteContact`, `addFeature`, `deleteFeature`, `grantConsent`/`withdrawConsent`,
 `deleteBiometric`.
 
-**Fixed in Phase 6: enrolment is guided, and the upload path is gone.** The
-2-4 file input, its 4-image cap and the `enrollBiometric` client method were
-deleted. Enrolment is now a *Start face enrollment* button that mounts
-[`EnrollWizard`](components.md#enrollwizard), which
-drives the four guided calls and shows the engine's own reason codes. This also
-retires three defects at once: the "2-4" label promised a minimum the page never
-enforced, the 4-image cap silently discarded images on a 3 MB failure, and the
-person had no idea which pose was being asked for. The section still shows the
-consent requirement, and renders the start button only when consent is `active`.
+### Localized in Phase 9, along with the unlabelled inputs
+
+The page carried roughly forty hardcoded English strings, so it is now fully on
+`profile.*`. Two defects fixed with it:
+
+- **Every input in the basic-information and medical forms had a `<label>` with
+  no `htmlFor` and no matching `id`.** A label that is not associated with its
+  control is not a label: clicking it focuses nothing, and a screen reader
+  announces an unlabelled edit field. Every field now has a matching `id`, and
+  the contact and feature forms use `sr-only` labels rather than relying on the
+  placeholder, because the accessible name of a placeholder-only input is not
+  announced by several readers.
+- **The consent status rendered the raw enum** (`active` / `withdrawn`) inside
+  otherwise Tamil copy. It now goes through `CONSENT_STATUS_LABELS`, typed as a
+  total map over `ConsentStatus`, so a third status fails the typecheck instead
+  of leaking English.
+
+The success flash is `role="status"` and the error is `role="alert"`, so a
+confirmation does not interrupt the assertive channel an error needs.
 
 Two sharp edges remain, both consequences of not rewriting the page:
 
-- **Deleting templates now asks for confirmation** via `window.confirm` with
+- **Deleting templates still asks for confirmation** via `window.confirm` with
   `enroll.delete.confirm`. It is the only revoke path and it is irreversible, but
   `window.confirm` is a browser dialog in a design system that otherwise has a
-  `Sheet` for exactly this. Worth promoting when the page is migrated.
+  `Sheet` for exactly this.
 - **A completed enrolment keeps the wizard mounted only until the parent updates
   `bio`.** `EnrollWizard` shows its own completion card from the response; the
   parent then flips to the enrolled block. Two success surfaces, briefly.
@@ -228,7 +246,17 @@ Remaining issues to address when migrating:
 - `flash()` uses a bare `setTimeout` with no cleanup, which warns under
   StrictMode if the component unmounts within 3 seconds.
 
-**Fixed in Phase 1.** Both vocabulary mismatches were real, and both failed
+**Fixed in Phase 6: enrolment is guided, and the upload path is gone.** The
+2-4 file input, its 4-image cap and the `enrollBiometric` client method were
+deleted. Enrolment is now a *Start face enrollment* button that mounts
+[`EnrollWizard`](components.md#enrollwizard), which
+drives the four guided calls and shows the engine's own reason codes. This also
+retires three defects at once: the "2-4" label promised a minimum the page never
+enforced, the 4-image cap silently discarded images on a 3 MB failure, and the
+person had no idea which pose was being asked for. The section still shows the
+consent requirement, and renders the start button only when consent is `active`.
+
+Fixed in Phase 1.** Both vocabulary mismatches were real, and both failed
 silently:
 
 - **Consent could never be withdrawn.** The toggle compared against `"granted"`;
@@ -246,7 +274,7 @@ rather than bare `string`, asserted in
 
 ## Demo
 
-`pages/Demo.tsx` -> `Demo`. Route: `/demo`. **Legacy.**
+`pages/Demo.tsx` -> `Demo`. Route: `/demo`.
 
 A grid of scenario buttons from `api.demoScenarios()`; selecting one calls
 `api.demoRun(id, 28.6139, 77.209)` and renders the synthetic input, the
@@ -255,6 +283,17 @@ identification outcome, a `ScoreBar`, method badges, candidates and
 
 Synthetic images flow through the **real** pipeline, which is the point: the
 demo exercises production code paths, not a mock.
+
+**Localized in Phase 9, and the disclosure is now unconditional.** `Demo` renders
+`LiveStatus` for the outcome, `NextAction` for what to do about it, and a
+`DemoEngineDisclosure` that is not conditional on any score. The point of this
+page is to show what the pipeline does, so a page whose disclosure disappears
+when the demo happens to look convincing is the wrong page: the notice reads the
+`engine_mode` and `algo_version` off the response and says the pipeline did not
+detect a face. Errors, section headings and score captions are now `demo.*`.
+
+Five orphaned keys were removed from the catalogues in the same pass, because a
+key no page renders is a translation that will silently rot.
 
 Issues: Delhi coordinates are hardcoded here while `DEMO_COORDS` in
 `utils/format.ts` exists for exactly this and is unused, and the same literals
@@ -265,7 +304,7 @@ feedback at all.
 
 ## Admin
 
-`pages/Admin.tsx` -> `Admin`. Route: `/admin`, behind `AdminOnly`. **Legacy.**
+`pages/Admin.tsx` -> `Admin`. Route: `/admin`, behind `AdminOnly`.
 
 Five tabs (`type Tab = "analytics" | "users" | "settings" | "hospitals" | "audit"`):
 analytics (four tiles, identifications by day, outcome breakdown), users (toggle
@@ -287,9 +326,23 @@ bystander, not something an admin assigns. Asserted as set equality against
 `ROLE_PERMISSIONS` in both directions, because the original bug was a
 substitution and a subset check would have passed.
 
+**Localized in Phase 9.** Tabs, tile captions, the outcome breakdown, role
+names, form labels, settings rows, hospital fields, audit columns and every
+error path are now `admin.*` / `role.*` keys.
+
+There are now **two** role maps, and they disagree on purpose, which is a trap:
+
+- `ROLES` is the assignable set — six roles, and `public` is not in it.
+- `ROLE_LABELS` is a total map over the `Role` type, so it must include
+  `public`, because the audit log renders the role of a row whose subject was
+  never assigned a role.
+
+Writing `ROLES` alone and indexing `ROLE_LABELS[role]` produced a typecheck
+error the moment an audit row carried `public`. Both maps are typed, so the two
+constraints are checked rather than remembered.
+
 Still open, and none of it is small:
 
-- Every label, button and error string is a literal.
 - Data loads per tab and is **never refetched** on re-select, so changes made
   elsewhere go stale.
 - There is no refresh affordance, so a mistyped setting can only be corrected by
@@ -302,18 +355,17 @@ Still open, and none of it is small:
 
 ## Privacy
 
-`pages/Privacy.tsx` -> `Privacy`. Route: `/privacy`. **Legacy.**
+`pages/Privacy.tsx` -> `Privacy`. Route: `/privacy`.
 
 Static: six privacy principles (`PRINCIPLES`) plus a role-based-access list and
-a synthetic-data disclaimer. No API calls, no state, no imports beyond React.
+a synthetic-data disclaimer. No API calls, no state.
 
 The colour problem is fixed — it used `text-white` on the light canvas and
 `text-accent-400` five times, neither of which resolved, so its headings were
-effectively invisible. What remains is worse than styling: **every string is a
-hardcoded literal, including the `privacy.title` i18n key that exists and is
-never used**, and the page states the project's privacy principles without a
-single one of them coming from the i18n catalogue. For a page whose entire
-content is claims about data handling, that is the wrong place to leave English
-literals in the source.
+effectively invisible.
 
-This page should be rewritten, not restyled.
+**Rewritten in Phase 9.** Every string, including the heading, now resolves
+through `privacy.*`, so the `privacy.title` key that existed and was never used
+is finally rendered. For a page whose entire content is claims about data
+handling, English literals in the source were the wrong thing to leave behind —
+a privacy notice is not the page to ship partially translated.

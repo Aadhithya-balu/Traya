@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 from app.config.settings import settings
@@ -149,20 +150,49 @@ def test_published_thresholds_are_disclosed_and_uncalibrated(client):
 
 
 def test_no_page_renders_a_confidence_without_the_disclosure():
-    """A bare percentage implies a validation that has never happened."""
-    pages = list((FRONTEND / "src" / "pages").glob("*.tsx")) + list(
-        (FRONTEND / "src" / "components").glob("*.tsx")
+    """A bare percentage implies a validation that has never happened.
+
+    This previously matched only `{confidence}` in JSX, which missed `Demo.tsx`
+    entirely: the page passed the number to `<ScoreBar value={...confidence} />`
+    and rendered a bare `%` on each candidate, and neither shape matched. A page
+    reached from the nav with a scripted score and no disclosure is exactly the
+    page a reviewer opens first, so the blind spot mattered.
+    """
+    pages = list((FRONTEND / "pages").glob("*.tsx")) + list(
+        (FRONTEND / "components").glob("*.tsx")
     )
+    # A glob that matches nothing makes every `assert not offenders` below pass
+    # for the wrong reason. This gate previously read `FRONTEND / "src" / ...`
+    # while `FRONTEND` already ends in `/src`, so it scanned zero files and had
+    # been silently green - including while `Demo.tsx` shipped a confidence with
+    # no disclosure.
+    assert len(pages) >= 15, (
+        f"expected the frontend pages and components, found {len(pages)}: "
+        "a scan over nothing asserts nothing"
+    )
+
+    #: Every shape by which a similarity or confidence number reaches a screen.
+    renders_a_score = re.compile(
+        r"\{\s*(?:[\w.]*\.)?(?:confidence|similarity|score)\s*\}"
+        r"|<ScoreBar\b"
+        r"|Math\.round\(\s*[\w.]*\.(?:confidence|similarity|score)\s*\*\s*100\s*\)",
+        re.I,
+    )
+    #: The disclosure must be *rendered*, not merely plumbed. Reading
+    #: `result.engine_mode` and then never showing it satisfies a looser pattern
+    #: while leaving the reader with a bare percentage, which is the exact defect
+    #: this gate exists to catch. So the accepted forms are a `t()` call into a
+    #: disclosure namespace, or a simulation flag bound into rendered output.
+    discloses = re.compile(
+        r"""t\(\s*["'][^"']*(?:engine|simulation)[^"']*["']"""
+        r"|\{\s*(?:isSimulation|simulated)\s*\}",
+        re.I,
+    )
+
     offenders = []
     for path in pages:
-        text = path.read_text(encoding="utf-8")
-        # A confidence rendered as a bare percentage with no neighbouring
-        # disclosure is the defect. Requiring the word "simulated", the engine
-        # mode or the thresholds call in the same file keeps this a real gate
-        # rather than a style preference.
-        if re.search(r"\{\s*(?:result\.confidence|confidence)\s*\}", text) and not re.search(
-            r"simulated|engine_mode|thresholds|engineMode|isSimulation", text
-        ):
+        text = _without_comments(path.read_text(encoding="utf-8"))
+        if renders_a_score.search(text) and not discloses.search(text):
             offenders.append(path.name)
     assert not offenders, f"these render a confidence with no disclosure: {offenders}"
 
@@ -431,6 +461,174 @@ def test_result_screen_renders_the_disclosure():
         )
 
 
+# --- source scanning -------------------------------------------------------
+
+
+def _without_comments(text: str) -> str:
+    """Return `text` with JSX and TypeScript comments removed.
+
+    A comment is not something a reader sees, so a comment must not be able to
+    satisfy a gate about what a reader sees. This is the same trap as naming a
+    Tailwind utility in prose so the build emits its rule.
+
+    Deliberately crude: block comments first, then line comments. A `//` inside
+    a string literal would be over-stripped, which for a scan like this costs
+    recall rather than correctness - a false pass would need a string holding
+    `//` immediately before the word it is being credited for.
+    """
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    return re.sub(r"(^|[^:])//[^\n]*", r"\1", text)
+
+
+# --- hardcoded copy -------------------------------------------------------
+
+# Heuristics for "a user could read this". Each rejects code-shaped text
+# outright: `=>` and generics otherwise match the tag-boundary pattern, and
+# every SVG path `d` string otherwise matches the literal pattern. The first
+# draft of this scan reported 116 findings of which roughly 100 were false, so
+# each exclusion below cost a real false positive.
+_SVG_PATH = re.compile(r"^[MmLlHhVvCcSsQqTtAaZz0-9\s.,+-]+$")
+_CODE_SHAPED = re.compile(r"[=;(){}\[\]|]|=>|\.\w+\(")
+_WORD = re.compile(r"[A-Za-z][A-Za-z'\-]*")
+
+
+def strip_comments(text: str) -> str:
+    text = re.sub(r"/\*[\s\S]*?\*/", " ", text)
+    return re.sub(r"//[^\n]*", " ", text)
+
+
+def is_prose(value: str) -> bool:
+    v = " ".join(value.split())
+    if len(v) < 2:
+        return False
+    if _CODE_SHAPED.search(v):
+        return False
+    if _SVG_PATH.match(v):
+        return False
+    if re.fullmatch(r"[a-z]+(\.[a-zA-Z0-9]+)+", v):      # i18n key
+        return False
+    if re.fullmatch(r"[a-z]+(-[a-z0-9]+)+", v):          # slug / css token
+        return False
+    if v.startswith(("http", "data:", "/", "#", ".", "@")):
+        return False
+    if not re.search(r"[A-Za-z]{3}", v):
+        return False
+    # Snake/camel enum values and API literals arrive as bare words; two such
+    # words side by side are a status, not a sentence. The test is `len >= 3` or
+    # an underscore, because `e.g. penicillin, peanuts` yields the words `e` and
+    # `g`, and a rule that treats those as an enum misses every placeholder that
+    # opens with an abbreviation - which is the shape that actually shipped on
+    # the profile form.
+    words = _WORD.findall(v)
+    if len(words) >= 2 and all(
+        w.islower() and (len(w) >= 3 or "_" in w) for w in words
+    ):
+        return False
+    if len(words) == 1 and (v.islower() or v.isupper()) and len(words[0]) >= 3:
+        return False
+    return True
+
+
+def scan_prose(text: str):
+    out = []
+    # JSX children: text between a tag close and the next tag open, on one line,
+    # containing no code punctuation.
+    for m in re.finditer(r">[ \t]*([^<>{}()\[\];=]{2,})[ \t]*<", text):
+        v = m.group(1)
+        if is_prose(v):
+            out.append((text[: m.start()].count("\n") + 1, "child", v))
+
+    # Prose attributes.
+    for m in re.finditer(
+        r'\b(alt|aria-label|placeholder|title|aria-description)="([^"]{2,})"', text
+    ):
+        if is_prose(m.group(2)):
+            out.append((text[: m.start()].count("\n") + 1, m.group(1), m.group(2)))
+
+    # Bare string literals, excluding anything already claimed as an i18n key.
+    for m in re.finditer(r"""(?<![(\w"'`])(["'])([A-Z][^"'\n]{5,})\1""", text):
+        v = m.group(2)
+        if is_prose(v):
+            out.append((text[: m.start()].count("\n") + 1, "literal", v))
+
+    seen = set()
+    uniq = []
+    for ln, kind, v in out:
+        k = (ln, kind, v)
+        if k not in seen:
+            seen.add(k)
+            uniq.append((ln, kind, v))
+    return sorted(uniq)
+
+
+ACCEPTED_NON_PROSE = {
+    # `KeyboardEvent.key` values. `Escape`, `ArrowLeft` and friends are the
+    # browser's names for keys, not English copy; localising them would break
+    # the comparison.
+    "Escape",
+    "ArrowRight",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowUp",
+    # The demo password. A credential is not copy, and a translated credential
+    # would be a different credential.
+    "TrayaDemo#2026",
+}
+
+
+def test_no_page_or_component_hardcodes_user_visible_english():
+    files = sorted(
+        list(FRONTEND.glob("pages/*.tsx")) + list(FRONTEND.glob("components/*.tsx"))
+    )
+    assert len(files) >= 19, (
+        f"expected the frontend pages and components, found {len(files)}: "
+        "a scan over nothing asserts nothing"
+    )
+
+    offenders: dict[str, list[str]] = {}
+    for path in files:
+        text = strip_comments(path.read_text(encoding="utf-8"))
+        for line, kind, value in scan_prose(text):
+            # The scanner can report a multi-line blob with stray whitespace;
+            # normalise before deciding whether it is copy.
+            cleaned = " ".join(value.split())
+            if not is_prose(cleaned):
+                continue
+            if cleaned in ACCEPTED_NON_PROSE:
+                continue
+            if _looks_like_identifiers(cleaned):
+                continue
+            offenders.setdefault(path.name, []).append(
+                f"line {line} [{kind}] {cleaned!r}"
+            )
+
+    assert not offenders, "hardcoded user-visible English: " + "; ".join(
+        f"{name}: {', '.join(rows)}" for name, rows in sorted(offenders.items())
+    )
+
+
+def _looks_like_identifiers(value: str) -> bool:
+    """True for the scanner's multi-line artifacts around code.
+
+    `>const [x, setX] = useState<Y>[];<` is code that the tag-boundary pattern
+    reads as text. The tell is that a code token survives: a dotted member
+    access, a bracket pair, or a leading `const`/`return`.
+
+    `e.g` and `i.e` are excluded explicitly, because `e.g. penicillin, peanuts`
+    also contains a dotted token and it is copy. That exclusion is exactly the
+    case the profile form shipped, so it is named rather than approximated by a
+    length rule that would also let real code through.
+    """
+    for match in re.finditer(r"\b([A-Za-z_$][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)", value):
+        if f"{match.group(1).lower()}.{match.group(2).lower()}" in {"e.g", "i.e"}:
+            continue
+        return True
+    if re.search(r"\w+\s*:\s*\w+\s*[,;)]", value):
+        return True
+    if re.search(r"^\s*(const|return|if|for|import|export)\b", value):
+        return True
+    return False
+
 # --- locale integrity ------------------------------------------------------
 
 
@@ -483,30 +681,159 @@ def test_no_catalogue_value_is_corrupted_by_an_encoding_round_trip():
             assert "\ufffd" not in value, f"{name}:{key} contains U+FFFD"
 
 
+#: Non-Tamil characters that are legitimate inside a Tamil value: typographic
+#: punctuation, and the product name and language names, which are shown in their
+#: own script so a language switcher is not a guess.
+_ALLOWED_NON_TAMIL = {
+    "HORIZONTAL ELLIPSIS",
+    "EM DASH",
+    "EN DASH",
+    "LEFT DOUBLE QUOTATION MARK",
+    "RIGHT DOUBLE QUOTATION MARK",
+    "MIDDLE DOT",
+    "BULLET",
+}
+
+
+#: Latin words permitted inside a Tamil value, each with the reason it is not an
+#: untranslated string:
+#:
+#: - `TRAYA`: the product name.
+#: - `English`: the language switcher names each language in its own script, so
+#:   someone who cannot yet read the current language can still find theirs.
+#: - `SMS`: an acronym for a specific channel; translating it would obscure it.
+#: - `Latitude`, `Longitude`: WGS-84 coordinate terms. An administrator typing a
+#:   hospital's coordinates searches for "Latitude"; inventing a rendering would
+#:   be worse than useless, and a wrong term for a coordinate system is a safety
+#:   problem rather than a localisation nicety.
+#:
+#: Adding to this list is a judgement call that should be argued in the commit
+#: message. It is not a general exemption for untranslated Latin: the assertion
+#: below still fails on any word not named here.
+_ALLOWED_LATIN = {"TRAYA", "English", "SMS", "Latitude", "Longitude"}
+
+
+def test_the_tamil_catalogue_contains_only_tamil():
+    """Catch the generation failure that actually produced a broken string.
+
+    `analytics.unknown` shipped as
+    `ரேக்வாலாட் ஸட்ଋ8ாரியுள்ளைவானில்லைவை` for "No result recorded" - an Oriya
+    vowel sign (U+0B0B) and a Latin digit wedged mid-word. Every structural check
+    passed: the key existed in both catalogues, the catalogues were symmetric, and
+    the value was not a run of question marks. It was nonsense Tamil.
+
+    Two signatures are asserted, because either alone can pass a bad string:
+
+    - a character from a non-Tamil script, and
+    - a Latin digit adjacent to a Tamil letter. Tamil has its own numerals, so a
+      `0`-`9` sitting inside a Tamil word is always a generation error and is a
+      much sharper signal than a stray foreign glyph.
+    """
+    ta = _locales()["ta.json"]
+    foreign: list[str] = []
+    digit_in_word: list[str] = []
+
+    for key, value in ta.items():
+        for index, ch in enumerate(value):
+            code = ord(ch)
+            if code >= 0x0B80 and code <= 0x0BFF:
+                continue
+            if code < 0x80 or ch.isspace():
+                # A Latin digit counts only when it is jammed against a Tamil
+                # letter, which is checked here rather than inside the Tamil
+                # branch above: a digit's own codepoint is not in the Tamil
+                # block, so testing for it there would never run.
+                if ch.isdigit():
+                    before = value[index - 1] if index else ""
+                    after = value[index + 1] if index + 1 < len(value) else ""
+                    for neighbour in (before, after):
+                        if not neighbour:
+                            continue
+                        n = ord(neighbour)
+                        if 0x0B80 <= n <= 0x0BFF:
+                            digit_in_word.append(
+                                f"{key} digit {ch!r} next to U+{n:04X}"
+                            )
+                continue
+            try:
+                name = unicodedata.name(ch)
+            except ValueError:
+                name = "UNASSIGNED"
+            if name in _ALLOWED_NON_TAMIL:
+                continue
+            foreign.append(f"{key} U+{code:04X} {name}")
+
+    assert not foreign, (
+        "ta.json contains characters from another script: " + "; ".join(foreign)
+    )
+    assert not digit_in_word, (
+        "ta.json contains a Latin digit adjacent to Tamil, which is always a "
+        "generation error: " + "; ".join(digit_in_word)
+    )
+
+    # Untranslated Latin words. Latin letters are otherwise legal, because the
+    # product name and the coordinate terms are meant to be Latin; this catches
+    # the case where a whole English phrase was left in a Tamil value.
+    latin_leaks: list[str] = []
+    for key, value in ta.items():
+        # Interpolation tokens are Latin by construction and are not copy.
+        stripped = re.sub(r"\{[^}]+\}", " ", value)
+        words = {w for w in re.findall(r"[A-Za-z][A-Za-z'\-]*", stripped) if len(w) > 1}
+        # ABO/Rh notation is a standard rather than a word: A+, A-, B+, AB-, O+.
+        # It is matched as a shape so the allowance cannot grow into "any token
+        # ending in a hyphen".
+        notation = {
+            tok
+            for tok in re.findall(r"(?<![A-Za-z])[A-Z]{1,2}[+-](?![A-Za-z])", stripped)
+        }
+        unexpected = sorted(words - _ALLOWED_LATIN - notation)
+        if unexpected:
+            latin_leaks.append(f"{key}: {unexpected}")
+    assert not latin_leaks, (
+        "ta.json has untranslated Latin words (allowed: "
+        f"{sorted(_ALLOWED_LATIN)}, plus ABO/Rh notation): "
+        + "; ".join(latin_leaks)
+    )
+
+
 def test_the_simulation_disclosure_is_readable_in_both_languages():
     """The safety banner must actually say something, in each catalogue.
 
     `test_engine_mode_is_disclosed_on_every_result` proves the API reports the
     mode; this proves a human can read what the client will show them. An empty
     or question-mark-only banner would satisfy every other disclosure test.
+
+    Every disclosure surface is covered, not just the hub's, because `Demo` was
+    found rendering a confidence with no disclosure at all - and `Demo` is the
+    page a reviewer opens first. A source scan cannot tell that a translated
+    string was left empty, so emptiness is asserted against the catalogue.
     """
+    #: `key` -> (minimum characters, minimum whitespace-separated words). A short
+    #: label like `Engine: {mode}` is deliberately absent: it names the engine but
+    #: explains nothing, which is the thing that must not pass.
+    disclosures = {
+        "hub.engine.simulationTitle": (8, 2),
+        "hub.engine.simulationBody": (80, 12),
+        "result.simulation": (60, 10),
+        "demo.engine.title": (8, 2),
+        "demo.engine.body": (80, 12),
+    }
+
     catalogues = _locales()
     for name, table in catalogues.items():
-        title = table.get("hub.engine.simulationTitle", "")
-        body = table.get("hub.engine.simulationBody", "")
-        assert len(title.strip()) >= 8, (
-            f"{name}: the simulation banner title is empty or too short to read"
-        )
-        assert len(body.split()) >= 8, (
-            f"{name}: the simulation banner body must explain itself, not just "
-            "name the engine"
-        )
-        # Tamil must actually be Tamil here, not a Latin transliteration.
-        if name == "ta.json":
-            tamil = sum(1 for ch in body if 0x0B80 <= ord(ch) <= 0x0BFF)
-            assert tamil >= 10, (
-                "ta.json: the simulation banner body must be written in Tamil"
+        for key, (min_chars, min_words) in disclosures.items():
+            value = table.get(key, "")
+            assert len(value.strip()) >= min_chars, (
+                f"{name}: {key} is empty or too short to read: {value!r}"
             )
+            assert len(value.split()) >= min_words, (
+                f"{name}: {key} must explain itself, not just name the engine"
+            )
+            if name == "ta.json":
+                tamil = sum(1 for ch in value if 0x0B80 <= ord(ch) <= 0x0BFF)
+                assert tamil >= 8, (
+                    f"ta.json: {key} must be written in Tamil, not transliterated"
+                )
 
 
 # --- Phase 9: the nine result states ---------------------------------------
@@ -610,6 +937,126 @@ def test_result_state_keys_exist_in_both_languages():
                 assert key in table, (
                     f"{state}.{slot} -> {key!r} is missing from {name}"
                 )
+
+
+# --- hooks must not own copy ------------------------------------------------
+
+#: `useCamera` and `useGeolocation` return error codes and let the page render
+#: them. Both previously held English sentences, so a Tamil responder read
+#: "Camera permission denied." in English at the moment they needed to know
+#: whether to retry or switch to the gallery.
+HOOK_ERROR_MAPS = {
+    "useCamera.ts": ("CameraErrorCode", "CAMERA_ERROR_KEYS"),
+    "useGeolocation.ts": ("GeoErrorCode", "GEO_ERROR_KEYS"),
+}
+
+#: String literals that are legitimately not user-visible: DOM/API names, format
+#: strings, and the enum members themselves.
+_NOT_PROSE = re.compile(
+    r"""^(?:
+          \w+(?:[-/]\w+)*          # kebab or slashed identifiers: NotAllowedError
+        | [\d.,:%\s-]+              # numbers, separators, ratios
+        | \{[^}]*\}                 # interpolation tokens
+        | .                        # anything shorter than a phrase
+    )$""",
+    re.VERBOSE,
+)
+
+
+def test_no_hook_returns_english_error_text():
+    """A hook that owns copy cannot be translated without the hook changing.
+
+    Asserted on the two hooks that surface failures to a person mid-emergency.
+    The rule is "no multi-word string literal that is prose", which is why the
+    allowed cases are enumerated: `NotAllowedError` is a DOM name and must stay
+    Latin, `image/jpeg` is a MIME type, and single words are too short to be a
+    sentence worth translating.
+    """
+    offences: list[str] = []
+    for filename in HOOK_ERROR_MAPS:
+        source = read("hooks", filename)
+        # Ignore comments; prose in a docstring explaining why the code exists
+        # is documentation, not copy. Strip block and line comments first.
+        stripped = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
+        stripped = re.sub(r"^\s*//.*$", " ", stripped, flags=re.MULTILINE)
+        for lineno, line in enumerate(stripped.splitlines(), 1):
+            for literal in re.findall(r'"([^"\n]*)"', line):
+                words = literal.split()
+                if len(words) < 3:
+                    continue
+                if _NOT_PROSE.match(literal):
+                    continue
+                offences.append(f"hooks/{filename}:{lineno} {literal!r}")
+    assert not offences, (
+        "hooks must return error codes, not sentences: " + "; ".join(offences)
+    )
+
+
+def test_hook_error_code_maps_are_exhaustive_and_translated():
+    """Every code a hook can return must have a message, in both languages.
+
+    The maps are typed `Record<Code, StringKey>` in TypeScript, so the compiler
+    catches a code added without a key. This asserts the other half: that the
+    keys are real, exist in both catalogues, and that the union in the source
+    and the map really do cover the same members. A stale member on either side
+    is how a code ends up rendering its own identifier to a responder.
+    """
+    catalogues = _locales()
+    for filename, (union_name, map_name) in HOOK_ERROR_MAPS.items():
+        source = read("hooks", filename)
+
+        union = re.search(
+            r"export type {}\s*=\s*(.*?);".format(union_name),
+            source,
+            re.DOTALL,
+        )
+        assert union, f"hooks/{filename} must export {union_name}"
+        # Quoted members only: the union body may legitimately contain comments
+        # and, for the single-line form, no leading `|` before the first member.
+        members = set(re.findall(r'"(\w+)"', union.group(1)))
+        assert members, f"{union_name} declares no string members"
+
+        mapping = re.search(
+            r"export const {}: Record<\w+, StringKey> = \{{(.*?)\n\}};".format(
+                map_name
+            ),
+            source,
+            re.DOTALL,
+        )
+        assert mapping, f"hooks/{filename} must export {map_name} as a Record"
+        entries = dict(re.findall(r'(\w+):\s*"([^"]+)"', mapping.group(1)))
+
+        assert set(entries) == members, (
+            f"{map_name} covers {sorted(entries)} but {union_name} declares "
+            f"{sorted(members)}"
+        )
+        for member, key in entries.items():
+            for name, table in catalogues.items():
+                assert key in table, (
+                    f"{map_name}.{member} -> {key!r} missing from {name}"
+                )
+
+
+def test_a_capture_failure_is_never_silent():
+    """`capture()` returning a bare null made a dead shutter look like a no-op.
+
+    The old signature was `Promise<string | null>` and three distinct failures
+    - no decoded frame, no 2d context, and a refused encode - all produced the
+    same `null`. To a responder that is indistinguishable from pressing the
+    shutter on a working camera. Asserted as a discriminated result.
+    """
+    source = read("hooks", "useCamera.ts")
+    assert "CaptureResult" in source, "capture must return a typed result"
+    assert "ok: true" in source and "ok: false" in source, (
+        "CaptureResult must distinguish success from failure"
+    )
+    assert re.search(r"capture: \(\) => Promise<CaptureResult>", source), (
+        "CameraState.capture must declare the discriminated result type"
+    )
+    # And the one failure that a person can act on immediately.
+    assert "noFrames" in source, (
+        "a camera that has not decoded a frame yet must be reported, not swallowed"
+    )
 
 
 # --- design-system traps ---------------------------------------------------

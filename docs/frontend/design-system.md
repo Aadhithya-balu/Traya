@@ -385,15 +385,29 @@ a language switcher that shows "Tamil" in a Latin alphabet is a guess at the
 best. Asserted nowhere by a "no Tamil in English" rule, deliberately; the
 corruption guard looks for `?` runs and `U+FFFD`, not for non-ASCII text.
 
-Coverage is incomplete by design of the migration, not by accident: the legacy
-pages still hardcode English, and `Privacy` does not even use its `privacy.*`
-keys. The namespaces exist and are populated; the pages have not caught up.
+**Coverage is complete as of Phase 9.** Every page resolves its user-visible copy
+through `t()`. `Privacy` now renders the `privacy.*` keys that existed and were
+unused, and the catalogues hold **440 keys each**, symmetric by construction.
+`test_no_page_or_component_hardcodes_user_visible_english` fails the build when a
+literal appears in a `.tsx` page or component, so the list of unwired namespaces
+below is now a list of translation work, not a list of English the user can see.
 
-**`enroll` is the one namespace that is now fully wired**, which is the proof the
-flat-key scheme survives contact with a real flow. It was written in Phase 0 and
-sat entirely unreferenced until Phase 6; `EnrollWizard` plus `Profile` now use
-every one of them, in both languages. Two things about how it is consumed are
-worth copying:
+That test is a scanner, and a scanner is only as good as its weakest
+assumption, so two things about it are deliberate:
+
+- **It strips comments first.** A Tailwind class named in prose is a class the
+  build emits a rule for, so comments are not a safe place to be exempt.
+- **It is mutation-checked.** The gate was re-run with each of the three English
+  strings that actually shipped during this migration reinstated, and each one
+  must fail the build. Two of the three initially passed, which is why the
+  exclusions are named (`Escape`, arrow-key names, `.querySelector`, the demo
+  password) rather than pattern-matched loosely.
+
+`enroll` was the first namespace to be fully wired, in Phase 6, which is the
+proof the flat-key scheme survives contact with a real flow. It was written in
+Phase 0 and sat entirely unreferenced until Phase 6; `EnrollWizard` plus
+`Profile` now use every one of them, in both languages. Two things about how it
+is consumed are worth copying:
 
 - **Guidance codes are keys, not sentences.** The engine returns
   `no_face_detected`, and `EnrollWizard` builds `enroll.guidance.${code}`. A
@@ -405,7 +419,7 @@ worth copying:
   and it is unavoidable: `StringKey` is derived from `en`, so a template literal
   cannot prove membership. Everything else uses a literal key.
 
-## The palette migration is done; the hardcoded English is not
+## The palette migration is done, and so is the string migration
 
 `ink-*` and `slate-*` were removed from the theme, and six files were still using
 them: `Admin`, `Demo`, `EmergencyHub`, `Privacy`, `Profile`, and `Guards`. Every
@@ -421,10 +435,15 @@ test_class_strings_do_not_contain_off_ramp_colours  # lookup tables in .ts
 The second one exists because `utils/format.ts` builds badge tints as strings in
 a data table. Three of those classes were invented and had never rendered.
 
-**Still outstanding: hardcoded English.** `EmergencyHub`, `Profile`, `Admin`,
-`Demo` and `Privacy` still render literal strings rather than i18n keys, and
-`Privacy` does not use its own `privacy.*` namespace. That is Phase 2 work and
-is tracked in [pages.md](pages.md).
+**The string migration is closed.** Phase 9 took the last five pages onto
+`hub.*`/`profile.*`/`admin.*`/`demo.*`/`privacy.*`, and
+`test_no_page_or_component_hardcodes_user_visible_english` holds the line from
+then on. Both migrations now share one lesson worth keeping: an `@layer
+components` class that nothing references, a Tailwind colour with no
+`<alpha-value>`, a spacing step outside `theme.spacing`, and an English literal
+in a page are the same defect. **The build emitted nothing, nothing looked
+broken, and only a machine could tell.** The tests exist because every one of
+those was caught by a scanner rather than by looking at the screen.
 
 To find un-migrated colour usage from the shell, the equivalent of the two tests
 above:
@@ -433,5 +452,5 @@ above:
 Select-String -Path src\pages\*.tsx -Pattern 'ink-|slate-|accent-\d|text-white'
 ```
 
-Treat a page as colour-migrated when that returns nothing. Do not treat it as
-finished until its strings are keys.
+Treat a page as finished when that returns nothing **and**
+`test_no_page_or_component_hardcodes_user_visible_english` passes.

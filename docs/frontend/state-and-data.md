@@ -141,51 +141,75 @@ before encoding. This is a latent failure, not a hypothetical one.
 
 ## useCamera
 
-`hooks/useCamera.ts` -> `useCamera`, `blobToBase64`, `fileToBase64`.
+`hooks/useCamera.ts` -> `useCamera`, `blobToBase64`, `fileToBase64`,
+`CameraErrorCode`, `CaptureResult`, `CAMERA_ERROR_KEYS`.
 
 | Member | Type | Notes |
 |---|---|---|
 | `stream` | `MediaStream \| null` | Mirrored into a ref. |
-| `error` | `string \| null` | Human-readable. |
+| `error` | `CameraErrorCode \| null` | A **code**, not prose. Map it with `CAMERA_ERROR_KEYS`. |
 | `capturing` | `boolean` | True only during the canvas encode. |
 | `active` | `boolean` | `!!stream`. |
 | `videoRef` | `RefObject<HTMLVideoElement \| null>` | **The consumer must attach it to a `<video>`.** |
 | `start` | `() => Promise<void>` | Requests the **rear** camera. |
 | `stop` | `() => void` | Stops all tracks. |
-| `capture` | `() => Promise<string \| null>` | Canvas encode, returns base64. |
+| `capture` | `() => Promise<CaptureResult>` | Never `null`; see below. |
 
 `start` requests `facingMode: { ideal: "environment" }` at 1080x1440 (3:4), which
 matches the `aspect-[3/4]` framing guide in `Emergency`. `capture` falls back to
-720x960 if `videoWidth`/`videoHeight` are 0. `play()` rejections are swallowed.
+720x960 if `videoWidth`/`videoHeight` is 0. `play()` rejections are swallowed.
 An unmount cleanup stops the stream, so the recording indicator does not stick.
 
-`capture` returns `null` if `video.readyState < 2` or the 2D context is
-unavailable, and the caller must handle that.
+### `error` is a code, and `capture` cannot return `null`
 
-`NotAllowedError` is distinguished; `NotFoundError` and `NotReadableError` are
-not, so a camera present-but-busy falls into the generic message. Error strings
-are hardcoded English and not i18n keys.
+Both were changed in Phase 9 and both had the same defect: the hook produced
+English, so the hook could not be translated. `error` now yields a
+`CameraErrorCode` and `capture` yields a discriminated `CaptureResult`:
+
+```ts
+type CaptureResult =
+  | { ok: true; data: string }
+  | { ok: false; code: CameraErrorCode };
+```
+
+`capture` previously returned `Promise<string | null>`, and both call sites
+treated `null` as "nothing to report" - a failed capture produced no message at
+all, so the button simply stopped working. A result object makes the failure
+impossible to drop: `ok: false` must be handled.
+
+`CAMERA_ERROR_KEYS` maps every code to an i18n key, and it is exhaustive over
+`CameraErrorCode`, so adding a code without a translation is a typecheck
+failure. `test_hook_error_code_maps_are_exhaustive_and_translated` asserts the
+same thing from the other side, by scanning the catalogues.
+
+`NotFoundError` and `NotReadableError` are distinguished, so a camera that is
+present but busy no longer collapses into the generic message.
 
 `blobToBase64` strips the `data:...;base64,` prefix via `FileReader`;
 `fileToBase64` delegates to it.
 
 ## useGeolocation
 
-`hooks/useGeolocation.ts` -> `useGeolocation`, `Coords`.
+`hooks/useGeolocation.ts` -> `useGeolocation`, `Coords`, `GeoErrorCode`,
+`GEO_ERROR_KEYS`.
 
 `useGeolocation(enabled = true)` returns
 `{ coords, error, loading, request }`, a one-shot high-accuracy fix with a 10
 second timeout (`{ enableHighAccuracy: true, timeout: 10000 }`). No watch
 position, so the location is a single snapshot.
 
+`error` is a `GeoErrorCode` mapped through `GEO_ERROR_KEYS`, for the same reason
+`useCamera.error` is a code: a raw English string here is English the Tamil UI
+cannot avoid.
+
 The effect auto-requests when `enabled` is true. `EmergencyHub` passes
 `enabled = false` and drives it manually, because it only wants a fix when the
 user opens the Location tab.
 
 `request` is a `useCallback` with a `[enabled]` dep that the body never reads -
-vestigial, and it would be flagged by a real exhaustive-deps rule. Error strings
-are English-only. Permission is detected via `err.code === err.PERMISSION_DENIED`,
-which compares against an instance property; it works but is unconventional.
+vestigial, and it would be flagged by a real exhaustive-deps rule. Permission is
+detected via `err.code === err.PERMISSION_DENIED`, which compares against an
+instance property; it works but is unconventional.
 
 ## api/client
 

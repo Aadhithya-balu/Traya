@@ -11,7 +11,7 @@ import type {
 } from "../api/types";
 import { useEmergency } from "../context/EmergencyContext";
 import { useAuth } from "../context/AuthContext";
-import { useGeolocation } from "../hooks/useGeolocation";
+import { useGeolocation, GEO_ERROR_KEYS } from "../hooks/useGeolocation";
 import { useI18n, type StringKey } from "../i18n";
 import { NextAction, StatusBadge, ScoreBar } from "../components/StatusBadge";
 import { LiveStatus } from "../components/LiveStatus";
@@ -292,7 +292,9 @@ export function EmergencyHub() {
                 {t("hub.location.demo")}
               </button>
             </div>
-            {geo.error && <p className="text-xs text-danger">{geo.error}</p>}
+            {geo.error && (
+              <p className="text-xs text-danger">{t(GEO_ERROR_KEYS[geo.error])}</p>
+            )}
 
             <div className="grid gap-4 sm:grid-cols-2">
               {/*

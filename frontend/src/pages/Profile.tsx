@@ -2,16 +2,16 @@ import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { api, ApiError } from "../api/client";
 import type {
-BiometricStatus,
-Consent,
-ConsentStatus,
-EmergencyContact,
-MedicalProfile,
-VisibleFeature,
+  BiometricStatus,
+  Consent,
+  ConsentStatus,
+  EmergencyContact,
+  MedicalProfile,
+  VisibleFeature,
 } from "../api/types";
 import { useAuth } from "../context/AuthContext";
 import { EnrollWizard } from "../components/EnrollWizard";
-import { useI18n } from "../i18n";
+import { useI18n, type StringKey } from "../i18n";
 import { fmtDateTime } from "../utils/format";
 
 const BLANK_MEDICAL: MedicalProfile = {
@@ -21,6 +21,18 @@ const BLANK_MEDICAL: MedicalProfile = {
   medications: [],
   emergency_notes: null,
   preferred_hospital: null,
+};
+
+/**
+ * Consent status as displayed.
+ *
+ * `active` and `withdrawn` are the values the backend persists; rendering them
+ * raw showed an English enum inside otherwise Tamil copy. The map is total over
+ * `ConsentStatus`, so a third value fails the typecheck rather than leaking.
+ */
+const CONSENT_STATUS_LABELS: Record<ConsentStatus, StringKey> = {
+  active: "consent.status.active",
+  withdrawn: "consent.status.withdrawn",
 };
 
 export function Profile() {
@@ -40,10 +52,10 @@ export function Profile() {
   const [ok, setOk] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const flash = (msg: string) => {
+  const flash = useCallback((msg: string) => {
     setOk(msg);
     setTimeout(() => setOk(null), 3000);
-  };
+  }, []);
 
   const load = useCallback(async () => {
     setError(null);
@@ -69,9 +81,9 @@ export function Profile() {
       setConsents(cs);
       setBio(b);
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Could not load profile.");
+      setError(err instanceof ApiError ? err.detail : t("profile.error.load"));
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     load();
@@ -95,9 +107,9 @@ export function Profile() {
         date_of_birth: profile.date_of_birth || null,
       });
       await refreshUser();
-      flash("Profile updated.");
+      flash(t("profile.flash.basics"));
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Update failed.");
+      setError(err instanceof ApiError ? err.detail : t("profile.error.update"));
     } finally {
       setBusy(false);
     }
@@ -117,9 +129,9 @@ export function Profile() {
         preferred_hospital: medicalDraft.preferred_hospital || null,
       };
       setMedical(await api.updateMedical(payload));
-      flash("Medical profile saved.");
+      flash(t("profile.flash.medical"));
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Update failed.");
+      setError(err instanceof ApiError ? err.detail : t("profile.error.update"));
     } finally {
       setBusy(false);
     }
@@ -139,10 +151,10 @@ export function Profile() {
         is_primary: (form.get("is_primary") as string) === "on",
       });
       setContacts((prev) => [...prev, contact]);
-      flash("Emergency contact added.");
+      flash(t("profile.flash.contact"));
       (e.target as HTMLFormElement).reset();
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Add failed.");
+      setError(err instanceof ApiError ? err.detail : t("profile.error.add"));
     } finally {
       setBusy(false);
     }
@@ -165,10 +177,10 @@ export function Profile() {
         body_location: String(form.get("body_location") || "") || undefined,
       });
       setFeatures((prev) => [...prev, feature]);
-      flash("Feature added.");
+      flash(t("profile.flash.feature"));
       (e.target as HTMLFormElement).reset();
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Add failed.");
+      setError(err instanceof ApiError ? err.detail : t("profile.error.add"));
     } finally {
       setBusy(false);
     }
@@ -195,10 +207,12 @@ export function Profile() {
       const updated =
         current === "active" ? await api.withdrawConsent(type) : await api.grantConsent(type);
       setConsents((prev) => prev.map((c) => (c.consent_type === type ? updated : c)));
-      flash(`Consent ${updated.status}.`);
+      flash(
+        t("profile.flash.consent", { status: t(CONSENT_STATUS_LABELS[updated.status]) }),
+      );
       if (type === "biometric_enrollment" && updated.status === "withdrawn") setBio(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Consent update failed.");
+      setError(err instanceof ApiError ? err.detail : t("profile.error.consent"));
     } finally {
       setBusy(false);
     }
@@ -212,9 +226,9 @@ export function Profile() {
       await api.deleteBiometric();
       setBio(null);
       setEnrolling(false);
-      flash("Biometric templates deleted.");
+      flash(t("profile.flash.biometric"));
     } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "Delete failed.");
+      setError(err instanceof ApiError ? err.detail : t("profile.error.delete"));
     } finally {
       setBusy(false);
     }
@@ -224,104 +238,188 @@ export function Profile() {
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-10">
-      <h1 className="text-3xl font-bold text-text">Profile</h1>
-      <p className="mt-1 text-sm text-muted">
-        Everything here is used to help identify you and reach your contacts in an emergency.
-      </p>
+      <h1 className="text-3xl font-bold text-text">{t("profile.page.title")}</h1>
+      <p className="mt-1 text-sm text-muted">{t("profile.page.intro")}</p>
 
       {error && (
-        <div className="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger">
+        <div
+          role="alert"
+          className="mt-4 rounded-lg border border-danger/30 bg-danger/10 p-3 text-sm text-danger"
+        >
           {error}
         </div>
       )}
+      {/* Confirmation, not an error: `status` rather than `alert` so it is
+          announced without interrupting, and does not compete for the
+          assertive channel an error needs. */}
       {ok && (
-        <div className="mt-4 rounded-lg border border-ok/30 bg-ok/10 p-3 text-sm text-ok">
+        <div
+          role="status"
+          className="mt-4 rounded-lg border border-ok/30 bg-ok/10 p-3 text-sm text-ok"
+        >
           {ok}
         </div>
       )}
 
       <div className="mt-6 space-y-6">
         <form onSubmit={saveProfile} className="card space-y-4">
-          <h2 className="font-semibold text-text">Basic information</h2>
+          <h2 className="font-semibold text-text">{t("profile.basics.heading")}</h2>
           <div>
-            <label className="label">Full name</label>
-            <input className="input" value={profile.full_name} onChange={(e) => setProfile((p) => ({ ...p, full_name: e.target.value }))} required />
+            <label className="label" htmlFor="profile-full-name">{t("profile.field.fullName")}</label>
+            <input
+              id="profile-full-name"
+              className="input"
+              value={profile.full_name}
+              onChange={(e) => setProfile((p) => ({ ...p, full_name: e.target.value }))}
+              required
+            />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="label">Phone</label>
-              <input className="input" value={profile.phone} onChange={(e) => setProfile((p) => ({ ...p, phone: e.target.value }))} />
+              <label className="label" htmlFor="profile-phone">{t("profile.field.phone")}</label>
+              <input
+                id="profile-phone"
+                className="input"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                value={profile.phone}
+                onChange={(e) => setProfile((p) => ({ ...p, phone: e.target.value }))}
+              />
             </div>
             <div>
-              <label className="label">Date of birth</label>
-              <input type="date" className="input" value={profile.date_of_birth} onChange={(e) => setProfile((p) => ({ ...p, date_of_birth: e.target.value }))} />
+              <label className="label" htmlFor="profile-dob">{t("profile.field.dob")}</label>
+              <input
+                id="profile-dob"
+                type="date"
+                className="input"
+                value={profile.date_of_birth}
+                onChange={(e) => setProfile((p) => ({ ...p, date_of_birth: e.target.value }))}
+              />
             </div>
           </div>
-          <button className="btn-primary" disabled={busy}>Save profile</button>
+          <button className="btn-primary" disabled={busy}>{t("profile.basics.submit")}</button>
         </form>
 
         <form onSubmit={saveMedical} className="card space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-text">Medical profile</h2>
-            <span className="badge bg-raised text-muted">
-              only critical info is shared with responders
-            </span>
+            <h2 className="font-semibold text-text">{t("profile.medical.heading")}</h2>
+            <span className="badge bg-raised text-muted">{t("profile.medical.sharedBadge")}</span>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="label">Blood group</label>
-              <input className="input" placeholder="e.g. O+ / A-" value={medicalDraft.blood_group} onChange={(e) => setMedicalDraft((m) => ({ ...m, blood_group: e.target.value }))} />
+              <label className="label" htmlFor="profile-blood-group">{t("profile.field.bloodGroup")}</label>
+              <input
+                id="profile-blood-group"
+                className="input"
+                placeholder={t("profile.ph.bloodGroup")}
+                value={medicalDraft.blood_group}
+                onChange={(e) => setMedicalDraft((m) => ({ ...m, blood_group: e.target.value }))}
+              />
             </div>
             <div>
-              <label className="label">Preferred hospital</label>
-              <input className="input" value={medicalDraft.preferred_hospital} onChange={(e) => setMedicalDraft((m) => ({ ...m, preferred_hospital: e.target.value }))} />
+              <label className="label" htmlFor="profile-preferred-hospital">{t("profile.field.preferredHospital")}</label>
+              <input
+                id="profile-preferred-hospital"
+                className="input"
+                value={medicalDraft.preferred_hospital}
+                onChange={(e) => setMedicalDraft((m) => ({ ...m, preferred_hospital: e.target.value }))}
+              />
             </div>
           </div>
           <div>
-            <label className="label">Critical allergies (comma separated)</label>
-            <input className="input" placeholder="e.g. penicillin, peanuts" value={medicalDraft.allergies} onChange={(e) => setMedicalDraft((m) => ({ ...m, allergies: e.target.value }))} />
+            <label className="label" htmlFor="profile-allergies">{t("profile.field.allergies")}</label>
+            <input
+              id="profile-allergies"
+              className="input"
+              placeholder={t("profile.ph.allergies")}
+              value={medicalDraft.allergies}
+              onChange={(e) => setMedicalDraft((m) => ({ ...m, allergies: e.target.value }))}
+            />
           </div>
           <div>
-            <label className="label">Critical conditions (comma separated)</label>
-            <input className="input" placeholder="e.g. diabetes, epilepsy" value={medicalDraft.conditions} onChange={(e) => setMedicalDraft((m) => ({ ...m, conditions: e.target.value }))} />
+            <label className="label" htmlFor="profile-conditions">{t("profile.field.conditions")}</label>
+            <input
+              id="profile-conditions"
+              className="input"
+              placeholder={t("profile.ph.conditions")}
+              value={medicalDraft.conditions}
+              onChange={(e) => setMedicalDraft((m) => ({ ...m, conditions: e.target.value }))}
+            />
           </div>
           <div>
-            <label className="label">Critical medications (comma separated)</label>
-            <input className="input" placeholder="e.g. insulin" value={medicalDraft.medications} onChange={(e) => setMedicalDraft((m) => ({ ...m, medications: e.target.value }))} />
+            <label className="label" htmlFor="profile-medications">{t("profile.field.medications")}</label>
+            <input
+              id="profile-medications"
+              className="input"
+              placeholder={t("profile.ph.medications")}
+              value={medicalDraft.medications}
+              onChange={(e) => setMedicalDraft((m) => ({ ...m, medications: e.target.value }))}
+            />
           </div>
           <div>
-            <label className="label">Emergency notes</label>
-            <textarea className="input min-h-20" value={medicalDraft.emergency_notes} onChange={(e) => setMedicalDraft((m) => ({ ...m, emergency_notes: e.target.value }))} />
+            <label className="label" htmlFor="profile-emergency-notes">{t("profile.field.emergencyNotes")}</label>
+            <textarea
+              id="profile-emergency-notes"
+              className="input min-h-20"
+              value={medicalDraft.emergency_notes}
+              onChange={(e) => setMedicalDraft((m) => ({ ...m, emergency_notes: e.target.value }))}
+            />
           </div>
-          <button className="btn-primary" disabled={busy}>Save medical profile</button>
+          <button className="btn-primary" disabled={busy}>{t("profile.medical.submit")}</button>
         </form>
 
         <div className="card">
-          <h2 className="mb-3 font-semibold text-text">Emergency contacts</h2>
+          <h2 className="mb-3 font-semibold text-text">{t("profile.contacts.heading")}</h2>
           <form onSubmit={addContact} className="grid gap-3 sm:grid-cols-4">
-            <input name="name" className="input" placeholder="Name" required />
-            <input name="relation" className="input" placeholder="Relation" />
-            <input name="phone" className="input" placeholder="Phone" required />
+            {/*
+              Placeholder-only inputs are unusable with a screen reader: the
+              accessible name comes from the placeholder, which several readers
+              do not announce. Each gets a visually hidden label so the field is
+              named either way, and the visible placeholder stays a hint.
+            */}
+            <div>
+              <label className="sr-only" htmlFor="contact-name">{t("profile.field.name")}</label>
+              <input id="contact-name" name="name" className="input" placeholder={t("profile.field.name")} required />
+            </div>
+            <div>
+              <label className="sr-only" htmlFor="contact-relation">{t("profile.field.relation")}</label>
+              <input id="contact-relation" name="relation" className="input" placeholder={t("profile.field.relation")} />
+            </div>
+            <div>
+              <label className="sr-only" htmlFor="contact-phone">{t("profile.field.phone")}</label>
+              <input id="contact-phone" name="phone" className="input" type="tel" placeholder={t("profile.field.phone")} required />
+            </div>
             <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5 text-sm text-muted">
-                <input type="checkbox" name="is_primary" className="accent-accent" />
-                Primary
+              <label className="flex items-center gap-1.5 text-sm text-muted" htmlFor="contact-primary">
+                <input id="contact-primary" type="checkbox" name="is_primary" className="accent-accent" />
+                {t("profile.contact.primary")}
               </label>
-              <button className="btn-ghost flex-1" disabled={busy}>Add</button>
+              <button className="btn-ghost flex-1" disabled={busy}>{t("profile.contact.add")}</button>
             </div>
           </form>
           <ul className="mt-4 space-y-2">
-            {contacts.length === 0 && <li className="text-sm text-faint">No contacts yet.</li>}
+            {contacts.length === 0 && (
+              <li className="text-sm text-faint">{t("profile.contact.empty")}</li>
+            )}
             {contacts.map((c) => (
               <li key={c.id} className="flex items-center justify-between rounded-lg border border-line bg-surface p-3">
                 <div>
                   <span className="text-sm font-medium text-text">{c.name}</span>
-                  {c.is_primary && <span className="badge ml-2 bg-accent/15 text-accent">primary</span>}
+                  {c.is_primary && (
+                    <span className="badge ml-2 bg-accent/15 text-accent">
+                      {t("profile.contact.primaryBadge")}
+                    </span>
+                  )}
                   <span className="ml-2 text-sm text-muted">{c.relation}</span>
                   <p className="text-xs text-faint">{c.phone}</p>
                 </div>
-                <button onClick={() => deleteContact(c.id)} className="btn-ghost !px-2.5 !py-1 text-xs text-danger">
-                  Remove
+                <button
+                  onClick={() => deleteContact(c.id)}
+                  className="btn-ghost !px-2.5 !py-1 text-xs text-danger"
+                  aria-label={t("profile.contact.removeNamed", { name: c.name })}
+                >
+                  {t("profile.contact.remove")}
                 </button>
               </li>
             ))}
@@ -329,24 +427,47 @@ export function Profile() {
         </div>
 
         <div className="card">
-          <h2 className="mb-3 font-semibold text-text">Visible identifying features</h2>
+          <h2 className="mb-3 font-semibold text-text">{t("profile.features.heading")}</h2>
           <form onSubmit={addFeature} className="grid gap-3 sm:grid-cols-4">
-            <input name="feature_type" className="input" placeholder="e.g. scar" required />
-            <input name="description" className="input" placeholder="Description" required />
-            <input name="body_location" className="input" placeholder="Body location" />
-            <button className="btn-ghost" disabled={busy}>Add</button>
+            <div>
+              <label className="sr-only" htmlFor="feature-type">{t("profile.field.featureType")}</label>
+              <input
+                id="feature-type"
+                name="feature_type"
+                className="input"
+                placeholder={t("profile.ph.featureType")}
+                required
+              />
+            </div>
+            <div>
+              <label className="sr-only" htmlFor="feature-description">{t("profile.field.description")}</label>
+              <input id="feature-description" name="description" className="input" placeholder={t("profile.field.description")} required />
+            </div>
+            <div>
+              <label className="sr-only" htmlFor="feature-location">{t("profile.field.bodyLocation")}</label>
+              <input id="feature-location" name="body_location" className="input" placeholder={t("profile.field.bodyLocation")} />
+            </div>
+            <button className="btn-ghost" disabled={busy}>{t("profile.feature.add")}</button>
           </form>
           <ul className="mt-4 space-y-2">
-            {features.length === 0 && <li className="text-sm text-faint">No features recorded.</li>}
+            {features.length === 0 && (
+              <li className="text-sm text-faint">{t("profile.feature.empty")}</li>
+            )}
             {features.map((f) => (
               <li key={f.id} className="flex items-center justify-between rounded-lg border border-line bg-surface p-3">
                 <div className="flex items-center gap-2">
+                  {/* `feature_type` is free text a person typed, not a closed
+                      set, so it renders as data. */}
                   <span className="badge bg-accent/15 text-accent">{f.feature_type}</span>
                   <span className="text-sm text-muted">{f.description}</span>
                   {f.body_location && <span className="text-xs text-faint">({f.body_location})</span>}
                 </div>
-                <button onClick={() => deleteFeature(f.id)} className="btn-ghost !px-2.5 !py-1 text-xs text-danger">
-                  Remove
+                <button
+                  onClick={() => deleteFeature(f.id)}
+                  className="btn-ghost !px-2.5 !py-1 text-xs text-danger"
+                  aria-label={t("profile.feature.removeNamed", { name: f.description })}
+                >
+                  {t("profile.feature.remove")}
                 </button>
               </li>
             ))}
@@ -354,22 +475,20 @@ export function Profile() {
         </div>
 
         <div className="card space-y-4">
-          <h2 className="font-semibold text-text">Biometric consent</h2>
-          <p className="text-sm text-muted">
-            Face matching is opt-in and fully revocable. Templates are encrypted at rest and never
-            returned to clients.
-          </p>
+          <h2 className="font-semibold text-text">{t("profile.consent.heading")}</h2>
+          <p className="text-sm text-muted">{t("profile.consent.body")}</p>
           <div className="flex items-center justify-between rounded-lg border border-line bg-surface p-4">
             <div>
-              <p className="text-sm font-medium text-text">biometric_enrollment</p>
+              {/* The consent type is a backend enum and stays as-is. */}
+              <p className="font-mono text-sm text-text">biometric_enrollment</p>
               <p className="text-xs text-faint">
-                Current status:{" "}
+                {t("profile.consent.currentStatus")}{" "}
                 {bioConsent ? (
                   <span className={bioConsent.status === "active" ? "text-ok" : "text-warn"}>
-                    {bioConsent.status}
+                    {t(CONSENT_STATUS_LABELS[bioConsent.status])}
                   </span>
                 ) : (
-                  "not recorded"
+                  t("profile.consent.notRecorded")
                 )}
               </p>
             </div>
@@ -378,26 +497,31 @@ export function Profile() {
               className={bioConsent?.status === "active" ? "btn-ghost" : "btn-primary"}
               disabled={busy}
             >
-              {bioConsent?.status === "active" ? "Withdraw consent" : "Grant consent"}
+              {bioConsent?.status === "active" ? t("profile.consent.withdraw") : t("profile.consent.grant")}
             </button>
           </div>
         </div>
 
         <div className="card space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="font-semibold text-text">Biometric enrollment</h2>
+            <h2 className="font-semibold text-text">{t("profile.biometric.heading")}</h2>
             <span className={bio?.status === "enrolled" ? "badge bg-ok/15 text-ok" : "badge bg-raised text-muted"}>
-              {bio?.status === "enrolled" ? `Enrolled · ${bio.num_samples} samples` : "Not enrolled"}
+              {bio?.status === "enrolled"
+                ? t("profile.biometric.enrolledWith", { count: bio.num_samples })
+                : t("profile.biometric.notEnrolled")}
             </span>
           </div>
 
           {bio?.status === "enrolled" && (
             <div className="rounded-lg border border-line bg-surface p-4 text-sm">
               <p className="text-muted">
-                Enrolled {fmtDateTime(bio.enrolled_at)} · algorithm {bio.algo_version ?? "current"}
+                {t("profile.biometric.detail", {
+                  date: fmtDateTime(bio.enrolled_at),
+                  version: bio.algo_version ?? t("profile.biometric.currentVersion"),
+                })}
               </p>
               <button onClick={deleteBiometric} className="btn-ghost mt-3 !px-3 !py-1.5 text-danger" disabled={busy}>
-                Delete all templates
+                {t("profile.biometric.deleteAll")}
               </button>
             </div>
           )}

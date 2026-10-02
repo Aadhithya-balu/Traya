@@ -6,7 +6,7 @@ import type {
   EnrollmentState,
   SampleVerdict,
 } from "../api/types";
-import { useCamera, fileToBase64 } from "../hooks/useCamera";
+import { useCamera, fileToBase64, CAMERA_ERROR_KEYS } from "../hooks/useCamera";
 import { useI18n, type StringKey } from "../i18n";
 
 /** Engine guidance codes arrive as bare strings; the prose lives in i18n. */
@@ -73,11 +73,19 @@ export function EnrollWizard({ onEnrolled, onCancel }: EnrollWizardProps) {
   const onCapture = useCallback(async () => {
     setBusy(true);
     try {
-      await submit(await camera.capture());
+      const shot = await camera.capture();
+      // Previously the failure path was a silent `null` handed straight to
+      // submit, so a capture that never produced a frame looked to the person
+      // like nothing had happened at all. Surfaces the reason instead.
+      if (!shot.ok) {
+        setError(t(CAMERA_ERROR_KEYS[shot.error]));
+        return;
+      }
+      await submit(shot.data);
     } finally {
       setBusy(false);
     }
-  }, [camera, submit]);
+  }, [camera, submit, t]);
 
   const onFile = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -204,7 +212,7 @@ export function EnrollWizard({ onEnrolled, onCancel }: EnrollWizardProps) {
         )}
         {camera.error && (
           <div className="absolute inset-x-0 bottom-0 bg-danger/90 p-3 text-center text-sm text-accent-fg">
-            {camera.error}
+            {t(CAMERA_ERROR_KEYS[camera.error])}
           </div>
         )}
       </div>
