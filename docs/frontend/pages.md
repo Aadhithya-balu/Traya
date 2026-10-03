@@ -17,6 +17,7 @@ covered in [routing.md](routing.md).
 | [`Demo`](#demo) | `/demo` | scenarios | complete |
 | [`Admin`](#admin) | `/admin` | 5 tabs | complete |
 | [`Privacy`](#privacy) | `/privacy` | none | complete |
+| [`Connect`](#connect) | `/connect` | form | complete |
 
 **complete** = design tokens, i18n keys, and layout respects the shell.
 **legacy** = colour is migrated but strings are still hardcoded English.
@@ -131,14 +132,19 @@ Design decisions:
 ## EmergencyHub
 
 `pages/EmergencyHub.tsx` -> `EmergencyHub`. Route: `/emergency/:sessionId`.
-**The largest page in the app.** Five tabs
-(`type Tab = "result" | "medical" | "contact" | "location" | "timeline"`), three
+**The largest page in the app.** Four tabs
+(`type Tab = "result" | "medical" | "contact" | "location"`), three
 local sub-components (`MatchResultSection`, `PublicMedicalSummary`,
-`ResponderExtras`), and ten pieces of state.
+`ResponderExtras`), and local state.
 
 Calls: `api.medicalSummary`, `api.responderProfile` (role-gated),
-`api.timeline`, `api.nearbyHospitals`, `api.sendLocation`, `api.contactAction`,
+`api.nearbyHospitals`, `api.sendLocation`, `api.contactAction`,
 `api.confirm`, plus `useGeolocation(false)`.
+
+**The audit `Timeline` tab was removed.** An audit trail is not what a responder
+at the scene needs, and it was the one tab whose content a normal user could not
+act on. The session log is now reachable only from `Profile`, as an opt-in
+activity log, so it still exists for the person whose data it is.
 
 **Both functional bugs are fixed, and Phase 9 closed the strings.** The page is
 no longer legacy. What remains is desktop layout and breakpoint behaviour, which
@@ -162,14 +168,12 @@ page could do. For a real engine it degrades to a one-line provenance note.
 
 Also still true, and worth knowing before you touch this page:
 
-- Every user-visible string is a literal. Five tabs' worth of labels, error
-  strings and confirmations. This is the largest i18n debt in the codebase.
+- Phase 9 put every user-visible string on `hub.*`, closing the largest i18n
+  debt in the codebase.
 - The page wraps itself in `mx-auto max-w-5xl` while `Layout` already
   constrains `<main>` to `max-w-2xl`, so the two fight. Remove the page-level
   container when migrating.
-- It is the largest file in the frontend at 553 lines and holds three
-  sub-components inline. Phase 9 rewrites it; Phase 2 only migrates the
-  strings.
+- It is the largest file in the frontend and holds three sub-components inline.
 
 ## Dashboard
 
@@ -198,14 +202,19 @@ endpoints**. Harmless, but it should depend on nothing instead.
 
 `pages/Profile.tsx` -> `Profile`. Route: `/profile`, behind `Protected`.
 
-Six sections: basic info, medical profile, emergency contacts (add/remove),
-visible features (add/remove), biometric consent grant/withdraw, and biometric
-enrolment (guided capture, delete).
+Seven sections: basic info, medical profile, emergency contacts (add/remove),
+visible features (add/remove), biometric consent grant/withdraw, biometric
+enrolment (guided capture, delete), and the opt-in activity log.
 
 Twelve calls: `getMedical`, `listContacts`, `listFeatures`, `listConsents`,
 `biometricStatus` on load; then `updateProfile`, `updateMedical`, `addContact`,
 `deleteContact`, `addFeature`, `deleteFeature`, `grantConsent`/`withdrawConsent`,
 `deleteBiometric`.
+
+The activity log is a thirteenth call, `accessHistory`, and it is **deliberately
+not** part of the page load: it fires only when the person opens the panel. An
+audit trail is a "check if you want" surface, not something to put in front of
+someone, and the emergency hub no longer shows one at all.
 
 ### Localized in Phase 9, along with the unlabelled inputs
 
@@ -369,3 +378,26 @@ through `privacy.*`, so the `privacy.title` key that existed and was never used
 is finally rendered. For a page whose entire content is claims about data
 handling, English literals in the source were the wrong thing to leave behind —
 a privacy notice is not the page to ship partially translated.
+
+## Connect
+
+`pages/Connect.tsx` -> `Connect`. Route: `/connect`. No guard; no auth needed.
+
+The screen that points a packaged build at a backend. A Capacitor app cannot run
+the Python service and has no same-origin `/api`, so the device must be told
+where a running server lives. The value is saved in `localStorage` under
+`traya_api_base` and read by `getApiBase()` on every request, so a shipped APK
+can be re-pointed with no rebuild and holds no server secret - only a URL.
+
+State: `url`, `busy`, `error`, `report`. `report` is the `HealthReport` returned
+by `checkConnection(withScheme(url))`, and the base is saved **only after**
+`/api/health` answers, so a typo cannot leave the app pointed at a dead host. The
+field is a text input, not `type="url"`, because a person types
+`192.168.1.10:8000` and the browser would reject the missing scheme before
+submit; `withScheme` prepends `http://` when the scheme is absent.
+
+On a native platform with no base configured, `Layout` redirects here on first
+run. The More sheet's **Server settings** row and the link under the landing page
+reach it afterwards. This page is the reason `client.ts` exposes `getApiBase`,
+`setApiBase`, `clearApiBase`, `getDefaultApiBase`, `normalizeApiBase` and
+`checkConnection`; see [state-and-data.md](state-and-data.md#the-backend-base-is-a-runtime-setting).

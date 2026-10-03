@@ -367,7 +367,6 @@ Twenty namespaces:
 | `medical` | Medical profile and public summary. |
 | `contact` | Emergency contacts and contact actions. |
 | `location` | GPS, hospital list, routing. |
-| `timeline` | Session event timeline. |
 | `dashboard` | Summary tiles, enrolment CTA, access history. |
 | `profile` | Profile sections, consent, enrolment, features. |
 | `enroll` | Guided pose capture steps. |
@@ -387,7 +386,7 @@ corruption guard looks for `?` runs and `U+FFFD`, not for non-ASCII text.
 
 **Coverage is complete as of Phase 9.** Every page resolves its user-visible copy
 through `t()`. `Privacy` now renders the `privacy.*` keys that existed and were
-unused, and the catalogues hold **440 keys each**, symmetric by construction.
+unused, and the catalogues hold **454 keys each**, symmetric by construction.
 `test_no_page_or_component_hardcodes_user_visible_english` fails the build when a
 literal appears in a `.tsx` page or component, so the list of unwired namespaces
 below is now a list of translation work, not a list of English the user can see.

@@ -1,0 +1,43 @@
+name: traya
+
+services:
+  api:
+    build:
+      context: .
+      args:
+        FETCH_MODELS: "true"
+    image: traya-api:local
+    env_file:
+      - path: backend/.env
+        required: false
+    environment:
+      FACE_MODELS_DIR: /models
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/api/health').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  db:
+    image: pgvector/pgvector:pg16
+    profiles: ["local-db"]
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: traya_local_dev
+      POSTGRES_DB: traya
+    ports:
+      - "54329:5432"
+    volumes:
+      - traya_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  traya_pgdata:

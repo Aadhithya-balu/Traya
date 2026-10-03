@@ -14,7 +14,7 @@ is installed; these are the only primitives available.
 | [`StatusBadge.tsx`](#statusbadge) | `StatusBadge`, `ScoreBar`, `SimulationNotice` |
 | [`QualityPanel.tsx`](#qualitypanel) | `QualityPanel` |
 | [`EnrollWizard.tsx`](#enrollwizard) | `EnrollWizard` |
-| [`icons.tsx`](#icons) | 17 icons |
+| [`icons.tsx`](#icons) | 18 icons |
 
 ---
 
@@ -389,7 +389,7 @@ minimums in the system cannot drift apart.
 
 ## Icons
 
-`components/icons.tsx`. Inline SVG, no icon dependency. Seventeen glyphs.
+`components/icons.tsx`. Inline SVG, no icon dependency. Eighteen glyphs.
 
 `IconProps` is `Omit<SVGProps<SVGSVGElement>, "children"> & { size?: number }`.
 The `base` helper sets `width`/`height` to `size` (default 22),
@@ -416,11 +416,11 @@ family look deliberate rather than assembled. Keep it.
 | `CloseIcon` | `Sheet` |
 | `ChevronRightIcon` | `Layout`, `Dashboard` |
 | `ChevronLeftIcon` | **unused - dead code** |
-| `CheckIcon` | `Landing`, `Register`, `Dashboard`, `QualityPanel` |
-| `AlertIcon` | `Layout`, `Login`, `Register`, `Emergency`, `QualityPanel` |
+| `CheckIcon` | `Landing`, `Register`, `Dashboard`, `Connect`, `QualityPanel` |
+| `AlertIcon` | `Layout`, `Login`, `Register`, `Emergency`, `Connect`, `QualityPanel` |
 | `ArrowIcon` | `Landing` |
+| `ServerIcon` | `Layout` More sheet (Server settings) |
 
-Two cleanups: `ChevronLeftIcon` is never used, and the file docstring says
-"fifteen glyphs" when there are seventeen. `IconProps` is not exported, so a
-consumer cannot type their own icon-compatible component - export it if you
+Two cleanups: `ChevronLeftIcon` is never used, and `IconProps` is not exported,
+so a consumer cannot type their own icon-compatible component - export it if you
 plan to add a custom glyph.

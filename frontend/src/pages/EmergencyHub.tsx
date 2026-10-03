@@ -7,7 +7,6 @@ import type {
   IdentifyResult,
   PublicSummary,
   ResponderProfile,
-  TimelineEvent,
 } from "../api/types";
 import { useEmergency } from "../context/EmergencyContext";
 import { useAuth } from "../context/AuthContext";
@@ -20,14 +19,13 @@ import { Tabs, TabPanel } from "../components/Tabs";
 import { AlertIcon } from "../components/icons";
 import { fmtKm, fmtTime } from "../utils/format";
 
-type Tab = "result" | "medical" | "contact" | "location" | "timeline";
+type Tab = "result" | "medical" | "contact" | "location";
 
 const TABS: ReadonlyArray<{ id: Tab; label: StringKey }> = [
   { id: "result", label: "result.tabs.summary" },
   { id: "medical", label: "result.tabs.medical" },
   { id: "contact", label: "result.tabs.contact" },
   { id: "location", label: "result.tabs.location" },
-  { id: "timeline", label: "result.tabs.timeline" },
 ];
 
 export function EmergencyHub() {
@@ -43,7 +41,6 @@ export function EmergencyHub() {
   const [medical, setMedical] = useState<PublicSummary | null>(null);
   const [responder, setResponder] = useState<ResponderProfile | null>(null);
   const [contact, setContact] = useState<ContactAction | null>(null);
-  const [timeline, setTimeline] = useState<TimelineEvent[] | null>(null);
   const [hospitals, setHospitals] = useState<HospitalNearby[] | null>(null);
   const geo = useGeolocation(false);
   const [locCoords, setLocCoords] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -86,16 +83,6 @@ export function EmergencyHub() {
     }
   }, [id, hasRole, t]);
 
-  const loadTimeline = useCallback(async () => {
-    if (!id) return;
-    setError(null);
-    try {
-      setTimeline(await api.timeline(id));
-    } catch (err) {
-      setError(describe(err, "hub.error.timeline"));
-    }
-  }, [id, t]);
-
   const loadHospitals = useCallback(async (lat: number, lng: number) => {
     setError(null);
     try {
@@ -110,7 +97,6 @@ export function EmergencyHub() {
     const label = TABS.find((entry) => entry.id === next)?.label;
     if (label) setAnnouncement(t("hub.live.tab", { label: t(label) }));
     if (next === "medical") loadMedical();
-    if (next === "timeline") loadTimeline();
     if (next === "location") {
       geo.request();
       if (geo.coords) loadHospitals(geo.coords.latitude, geo.coords.longitude);
@@ -397,29 +383,6 @@ export function EmergencyHub() {
           </div>
         </TabPanel>
 
-        <TabPanel tabId="timeline" idPrefix="hub" active={tab === "timeline"} className="mt-6">
-          <div className="card">
-            <h2 className="mb-4 font-semibold text-text">{t("hub.timeline.title")}</h2>
-            {timeline === null && <p className="text-sm text-faint">{t("hub.timeline.loading")}</p>}
-            {timeline && timeline.length === 0 && (
-              <p className="text-sm text-faint">{t("hub.timeline.empty")}</p>
-            )}
-            <ol className="relative space-y-4 border-l border-line pl-5">
-              {timeline?.map((ev, i) => (
-                <li key={i} className="relative">
-                  <span aria-hidden className="absolute -left-[25px] top-1 h-2.5 w-2.5 rounded-full bg-accent" />
-                  <p className="text-sm font-medium text-text">{ev.action}</p>
-                  <p className="text-xs text-faint">{fmtTime(ev.at)}</p>
-                  {ev.details && (
-                    <pre className="mt-1 overflow-x-auto rounded bg-surface p-2 text-[11px] text-muted">
-                      {JSON.stringify(ev.details, null, 1)}
-                    </pre>
-                  )}
-                </li>
-              ))}
-            </ol>
-          </div>
-        </TabPanel>
       </div>
     </div>
   );

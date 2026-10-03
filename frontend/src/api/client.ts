@@ -14,6 +14,7 @@ import type {
   EmergencyContact,
   EmergencyStartOut,
   FallbackResult,
+  HealthReport,
   HospitalAdmin,
   HospitalNearby,
   IdentifyResult,
@@ -33,6 +34,89 @@ import type {
 const ACCESS_KEY = "traya_access";
 const REFRESH_KEY = "traya_refresh";
 const SESSION_TOKEN_KEY = "traya_emergency_token";
+const API_BASE_KEY = "traya_api_base";
+
+/**
+ * Absolute origin of the API, in order of precedence:
+ *
+ *   1. a runtime override saved on the device (`traya_api_base`),
+ *   2. the build-time `VITE_API_BASE` (a deployed web or native build),
+ *   3. empty, meaning same-origin `/api` (the dev proxy and the FastAPI-served
+ *      build both answer under their own origin).
+ *
+ * A packaged app has no same-origin API and cannot run the Python backend, so it
+ * must reach one the user hosts. Reading the override on every call - not once
+ * at import - is what lets a shipped APK be pointed at any backend without a
+ * rebuild, and what keeps every server secret out of the app: the device stores
+ * a URL, never a key. Trailing slashes are stripped so `/api` and `${base}/api`
+ * join the same way.
+ */
+const BUILD_API_BASE = (import.meta.env.VITE_API_BASE ?? "").replace(/\/+$/, "");
+
+export function normalizeApiBase(url: string): string {
+  return url.trim().replace(/\/+$/, "");
+}
+
+export function getApiBase(): string {
+  let stored: string | null = null;
+  try {
+    stored = localStorage.getItem(API_BASE_KEY);
+  } catch {
+    stored = null;
+  }
+  return stored ? normalizeApiBase(stored) : BUILD_API_BASE;
+}
+
+/** The value compiled into the build, shown so the device can fall back to it. */
+export function getDefaultApiBase(): string {
+  return BUILD_API_BASE;
+}
+
+export function setApiBase(url: string): void {
+  try {
+    localStorage.setItem(API_BASE_KEY, normalizeApiBase(url));
+  } catch {
+    /* storage unavailable; the override simply does not persist */
+  }
+}
+
+export function clearApiBase(): void {
+  try {
+    localStorage.removeItem(API_BASE_KEY);
+  } catch {
+    /* nothing to clear */
+  }
+}
+
+/**
+ * Probe an arbitrary origin's `/api/health`, without saving it.
+ *
+ * The saved base is only changed once a server has answered, so a typo cannot
+ * leave the app pointed at a dead address. Kept out of `request` because a probe
+ * must run before any base exists and must not trigger the token refresh path.
+ */
+export async function checkConnection(
+  base = getApiBase(),
+  timeoutMs = 8_000,
+): Promise<HealthReport> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error("timeout")), timeoutMs);
+  try {
+    const res = await fetch(`${normalizeApiBase(base)}/api/health`, {
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+    return (await res.json()) as HealthReport;
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    if (controller.signal.aborted) {
+      throw new ApiError(0, "The server took too long to respond", true);
+    }
+    throw new ApiError(0, "Cannot reach the server", true);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** Identification embeds a model and searches; give it room before assuming a hang. */
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -104,7 +188,7 @@ async function refreshAccessToken(): Promise<string | null> {
     refreshPromise = (async () => {
       const refresh = getTokens().refresh;
       if (!refresh) return null;
-      const res = await fetch("/api/auth/refresh", {
+      const res = await fetch(`${getApiBase()}/api/auth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -145,7 +229,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     };
     if (token) headers["Authorization"] = `Bearer ${token}`;
     if (emergency && sessionToken) headers["X-TRAYA-Session-Token"] = sessionToken;
-    return fetch(`/api${path}`, { ...init, headers, signal: controller.signal });
+    return fetch(`${getApiBase()}/api${path}`, { ...init, headers, signal: controller.signal });
   };
 
   try {

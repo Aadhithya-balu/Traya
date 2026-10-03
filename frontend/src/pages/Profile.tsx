@@ -7,6 +7,7 @@ import type {
   ConsentStatus,
   EmergencyContact,
   MedicalProfile,
+  TimelineEvent,
   VisibleFeature,
 } from "../api/types";
 import { useAuth } from "../context/AuthContext";
@@ -47,6 +48,9 @@ export function Profile() {
   const [consents, setConsents] = useState<Consent[]>([]);
   const [bio, setBio] = useState<BiometricStatus | null>(null);
   const [enrolling, setEnrolling] = useState(false);
+  const [activity, setActivity] = useState<TimelineEvent[] | null>(null);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [activityError, setActivityError] = useState<string | null>(null);
 
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -231,6 +235,26 @@ export function Profile() {
       setError(err instanceof ApiError ? err.detail : t("profile.error.delete"));
     } finally {
       setBusy(false);
+    }
+  };
+
+  /**
+   * The activity log is opt-in. It is deliberately not loaded with the page:
+   * it is a "check if you want" surface, not something a person needs in front
+   * of them, and it never loads until they open it.
+   */
+  const toggleActivity = async () => {
+    if (activityOpen) {
+      setActivityOpen(false);
+      return;
+    }
+    setActivityOpen(true);
+    if (activity !== null) return;
+    setActivityError(null);
+    try {
+      setActivity(await api.accessHistory());
+    } catch (err) {
+      setActivityError(err instanceof ApiError ? err.detail : t("profile.activity.error"));
     }
   };
 
@@ -551,6 +575,44 @@ export function Profile() {
             </button>
           ) : (
             <p className="text-sm text-muted">{t("enroll.consent.required")}</p>
+          )}
+        </div>
+
+        <div className="card space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="font-semibold text-text">{t("profile.activity.heading")}</h2>
+            <button
+              type="button"
+              onClick={toggleActivity}
+              className="btn-ghost !px-3 !py-1.5 text-sm"
+              aria-expanded={activityOpen}
+            >
+              {activityOpen ? t("profile.activity.hide") : t("profile.activity.show")}
+            </button>
+          </div>
+          <p className="text-sm text-muted">{t("profile.activity.intro")}</p>
+
+          {activityOpen && (
+            <div>
+              {activityError && <p className="text-sm text-danger">{activityError}</p>}
+              {activity === null && !activityError && (
+                <p className="text-sm text-faint">{t("common.loading")}</p>
+              )}
+              {activity && activity.length === 0 && (
+                <p className="text-sm text-faint">{t("profile.activity.empty")}</p>
+              )}
+              <ul className="space-y-2">
+                {activity?.map((ev, i) => (
+                  <li
+                    key={i}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-line bg-surface p-3"
+                  >
+                    <span className="font-mono text-xs text-text">{ev.action}</span>
+                    <span className="whitespace-nowrap text-xs text-faint">{fmtDateTime(ev.at)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
       </div>

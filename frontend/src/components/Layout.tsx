@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Capacitor } from "@capacitor/core";
 
+import { getApiBase } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useI18n, LOCALES, type Locale, type StringKey } from "../i18n";
 import { useTheme } from "../theme";
@@ -16,6 +18,7 @@ import {
   MoreIcon,
   MoonIcon,
   PulseIcon,
+  ServerIcon,
   ShieldIcon,
   SunIcon,
   UserIcon,
@@ -53,6 +56,16 @@ export function Layout() {
   // Leaving the emergency flow must not leave the sheet covering it.
   const onEmergencyFlow = location.pathname.startsWith("/emergency");
 
+  // A packaged app has no same-origin API and no built-in backend. Until one is
+  // chosen, every request would fail silently against `https://localhost`, so a
+  // first-run device is sent to the connection screen instead.
+  const needsBackend = Capacitor.isNativePlatform() && !getApiBase();
+  useEffect(() => {
+    if (needsBackend && location.pathname !== "/connect") {
+      navigate("/connect", { replace: true });
+    }
+  }, [needsBackend, location.pathname, navigate]);
+
   const visibleTabs = PRIMARY_TABS.filter(
     (tab) => !tab.requiresAuth || isAuthed,
   );
@@ -73,6 +86,7 @@ export function Layout() {
       ? [{ to: "/admin", label: t("nav.admin"), icon: ShieldIcon }]
       : []),
     { to: "/privacy", label: t("nav.privacy"), icon: AlertIcon },
+    { to: "/connect", label: t("nav.connect"), icon: ServerIcon },
   ];
 
   return (
