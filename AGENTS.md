@@ -310,6 +310,35 @@ below is the original defect, not the current state.
     requires `len >= 3` or an underscore, and `e.g`/`i.e` are excluded from the
     member-access check by name.
 
+18d. **A Capacitor Android build needs a different JDK than the backend.**
+    Capacitor 8 compiles with `--release 21`, and the backend JDK
+    (`jdk-17.0.18`, what `JAVA_HOME` normally points at) fails the native build
+    with `invalid source release: 21`. Set `JAVA_HOME` to the JDK 24 install for
+    `gradlew` only. `frontend/android/local.properties` must also carry
+    `sdk.dir=...`; Gradle does not read `ANDROID_HOME` here and none is set.
+    A WebView at `https://localhost` cannot resolve a relative `/api`, so a
+    native build needs an absolute API origin: bake `VITE_API_BASE` (see
+    `frontend/.env.example`), or ship it without one and let the user set the
+    server on the `Connect` screen, which stores the URL in `localStorage` and
+    needs no rebuild and no secret on the device. Cleartext HTTP is enabled for
+    **debug only**, in `app/src/debug/AndroidManifest.xml`, so the release build
+    is not weakened.
+
+### Docker
+
+18e. **The image must not contain `backend/.env`.** Secrets reach the container
+    through Compose `env_file`, and `.dockerignore` keeps the file out of the
+    build context; the image ships only `.env.example`. A `.env` baked into a
+    layer stays leaked after the file is deleted, because layers are additive.
+    Compose uses `required: false`, so a machine without one still boots on
+    SQLite rather than failing.
+18f. **The biometric models are fetched at image build.** The Dockerfile runs
+    `scripts/fetch_biometric_models.py`, which verifies a pinned SHA-256, into
+    `/models`; `FACE_MODELS_DIR` is set as an image env var. Build with
+    `--build-arg FETCH_MODELS=false` to skip it, and the engine correctly
+    degrades to the simulation under `auto`, which `/api/health` reports as
+    `simulation: true`.
+
 ### Backend architecture
 
 19. **New queries go in `app/repositories/`.** Never in a router or a service.
@@ -404,12 +433,14 @@ Run from the repo root unless noted.
 | Task | Command |
 |---|---|
 | Run everything (dev) | `npm run dev:all` — backend :8000 + vite :5173 |
+| **Run everything (Docker)** | `docker compose up --build` — whole app on :8000, Supabase via `backend/.env` |
 | **Verify docs** | `npm run docs:check` (alias `npm run verify`) |
 | **Backend tests** | `cd backend; .venv\Scripts\python.exe -m pytest` |
 | Backend only | `cd backend; .venv\Scripts\python.exe -m uvicorn app.main:app --port 8000` |
 | Frontend only | `cd frontend; npm run dev` (http://localhost:5173) |
 | Frontend typecheck | `cd frontend; npm run typecheck` |
 | Frontend build | `cd frontend; npm run build` |
+| **Debug Android APK** | `cd frontend; npm run build; npx cap sync android; cd android; $env:JAVA_HOME="C:\Program Files\Java\jdk-24"; .\gradlew.bat assembleDebug` |
 | Backend tests on Postgres | `cd backend; $env:TRAYA_TEST_DATABASE_URL="postgresql+psycopg://postgres:traya_local_dev@127.0.0.1:54329/traya_test"; .venv\Scripts\python.exe -m pytest` |
 | Local Postgres (pgvector) | `docker run -d --name traya-pg -p 54329:5432 -e POSTGRES_PASSWORD=traya_local_dev -e POSTGRES_USER=postgres -e POSTGRES_DB=traya pgvector/pgvector:pg16` |
 | Migrate to head | `cd backend; .venv\Scripts\python.exe -m alembic upgrade head` |
@@ -439,6 +470,9 @@ result, not an expectation.
 ```
 C:\Traya\
   AGENTS.md                  this file — read first
+  Dockerfile                 multi-stage web + api image (see §4)
+  docker-compose.yml         api service + opt-in `local-db` pgvector profile
+  .dockerignore              keeps .env, .models, .venv, node_modules, android/ out
   backend\                   FastAPI + SQLAlchemy + Alembic
     app\
       api\                   admin, auth, biometric, demo, emergency, hospitals, users
@@ -461,15 +495,19 @@ C:\Traya\
                              deploy schema
   frontend\
     src\
-      pages\                 10 pages, all routed
+      pages\                 11 pages, all routed
       components\            Layout, Guards, Sheet, Tabs, StatusBadge, QualityPanel,
                              EnrollWizard, icons
       context\               AuthContext, EmergencyContext
       hooks\                 useCamera, useGeolocation
       api\                   client.ts (the only network boundary), types.ts
-      i18n\                  locales/en.json + ta.json – 440 keys each, UTF-8 no BOM;
+      i18n\                  locales/en.json + ta.json – 454 keys each, UTF-8 no BOM;
                              strings.ts is a typed re-export over them
       theme\                 ThemeProvider
+    capacitor.config.ts      Capacitor app id / name / webDir: dist
+    .env.example             VITE_API_BASE - optional API-base default for the
+                             native build; the Connect screen sets it at runtime
+    android\                 Capacitor native project (debug APK; see §4)
   docs\                      31 pages — see §6
   scripts\                   dev-all.mjs, check-docs.mjs
 ```
@@ -609,10 +647,13 @@ diagnostic an unexplained 422 has). Details in
    `test_no_page_or_component_hardcodes_user_visible_english` fails the build if
    one reintroduces a literal. `Privacy` now renders the `privacy.title` key that
    had existed and was unused.
-5. **The i18n catalogue is 440 keys each, and Phase 9 consumed the
+5. **The i18n catalogue is 454 keys each, and Phase 9 consumed the
    `hub.*`/`analytics.*`/`result.*` namespaces plus `emergency.*`, `contact.*`,
    `location.*`, `dashboard.*`, `profile.*`, `medical.*`, `admin.*`, `demo.*`
-   and `privacy.*`.** `useCamera`/`useGeolocation` return codes mapped through
+   and `privacy.*`.** The session audit timeline was removed from the emergency
+   hub — an audit trail is not what a responder at the scene needs — and is now
+   the opt-in `profile.activity.*` log. `useCamera`/`useGeolocation` return codes
+   mapped through
    `CAMERA_ERROR_KEYS`/`GEO_ERROR_KEYS` rather than English.
    `test_both_catalogues_carry_identical_keys` asserts the two catalogues are
    identical in shape, so a gap is a page that does not call `t()`, not a missing

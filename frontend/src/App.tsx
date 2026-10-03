@@ -3,6 +3,7 @@ import { Layout } from "./components/Layout";
 import { Landing } from "./pages/Landing";
 import { Login } from "./pages/Login";
 import { Register } from "./pages/Register";
+import { Connect } from "./pages/Connect";
 import { Emergency } from "./pages/Emergency";
 import { EmergencyHub } from "./pages/EmergencyHub";
 import { Demo } from "./pages/Demo";
@@ -20,6 +21,7 @@ export function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/privacy" element={<Privacy />} />
+        <Route path="/connect" element={<Connect />} />
         <Route path="/emergency" element={<Emergency />} />
         <Route path="/emergency/:sessionId" element={<EmergencyHub />} />
         <Route path="/demo" element={<Demo />} />

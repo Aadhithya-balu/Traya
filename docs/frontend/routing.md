@@ -36,13 +36,18 @@ One layout route wraps every page. `Layout.tsx` renders `<Outlet />` inside
 | 2 | `/login` | `Login` | none | everyone |
 | 3 | `/register` | `Register` | none | everyone |
 | 4 | `/privacy` | `Privacy` | none | everyone |
-| 5 | `/emergency` | `Emergency` | none | everyone, including unauthenticated bystanders |
-| 6 | `/emergency/:sessionId` | `EmergencyHub` | none | session token or responder |
-| 7 | `/demo` | `Demo` | none | everyone |
-| 8 | `/dashboard` | `Dashboard` | `Protected` | any authenticated user |
-| 9 | `/profile` | `Profile` | `Protected` | any authenticated user |
-| 10 | `/admin` | `Admin` | `AdminOnly` | `admin` role only |
-| 11 | `*` | `Landing` | none | catch-all, so unknown URLs land somewhere sane |
+| 5 | `/connect` | `Connect` | none | everyone; the first-run screen on a packaged app |
+| 6 | `/emergency` | `Emergency` | none | everyone, including unauthenticated bystanders |
+| 7 | `/emergency/:sessionId` | `EmergencyHub` | none | session token or responder |
+| 8 | `/demo` | `Demo` | none | everyone |
+| 9 | `/dashboard` | `Dashboard` | `Protected` | any authenticated user |
+| 10 | `/profile` | `Profile` | `Protected` | any authenticated user |
+| 11 | `/admin` | `Admin` | `AdminOnly` | `admin` role only |
+| 12 | `*` | `Landing` | none | catch-all, so unknown URLs land somewhere sane |
+
+`Layout` also redirects a native app to `/connect` on first run when no backend
+base is configured (`Capacitor.isNativePlatform()`), because a WebView has no
+same-origin API and would otherwise fail every request against `https://localhost`.
 
 ## Guards
 

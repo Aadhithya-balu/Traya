@@ -913,7 +913,7 @@ last five pages), `fc814e8` (`Sheet` focus management).
 | Gate item | State |
 |---|---|
 | Zero hardcoded user-visible English outside the catalogues | Met — scanner in `test_frontend_contract.py`, mutation-checked on the three strings that shipped |
-| Tamil and English complete, no key missing | Met — 440 keys each, symmetric |
+| Tamil and English complete, no key missing | Met — 441 keys each, symmetric |
 | Every result state reachable, each with a working next action | Met — see `api/resultStates.ts` and `StatusBadge` |
 | Keyboard-only completion of the full emergency flow | **Unverified** |
 | A screen reader announces every capture and identification state | **Unverified** |

@@ -1,7 +1,7 @@
 /**
  * Inline SVG icons.
  *
- * The app ships no icon dependency: these fifteen glyphs are all the UI needs,
+ * The app ships no icon dependency: these eighteen glyphs are all the UI needs,
  * and inlining them keeps the bundle small and the stroke weight consistent.
  * Every icon inherits `currentColor` and takes its size from the `size` prop.
  */
@@ -142,5 +142,13 @@ export const ArrowIcon = (p: IconProps) => (
   <svg {...base(p)}>
     <path d="M4 12h15" />
     <path d="M13 6l6 6-6 6" />
+  </svg>
+);
+
+export const ServerIcon = (p: IconProps) => (
+  <svg {...base(p)}>
+    <rect x="3.5" y="4" width="17" height="6" rx="1.5" />
+    <rect x="3.5" y="14" width="17" height="6" rx="1.5" />
+    <path d="M7 7h.01M7 17h.01" />
   </svg>
 );

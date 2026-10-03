@@ -12,20 +12,28 @@ const python = isWin
   ? path.join(backendDir, ".venv", "Scripts", "python.exe")
   : path.join(backendDir, ".venv", "bin", "python");
 
+const vite = path.join(frontendDir, "node_modules", "vite", "bin", "vite.js");
+const tsc = path.join(frontendDir, "node_modules", "typescript", "bin", "tsc");
+
 const children = new Set();
 let stopping = false;
 
-function run(label, cmd, args, cwd) {
-  const child = spawn(cmd, args, { cwd, shell: isWin });
-  children.add(child);
+function prefixLines(label, stream) {
   const prefix = `[${label}] `;
-  child.stdout?.on("data", (d) => process.stdout.write(prefix + d));
-  child.stderr?.on("data", (d) => process.stderr.write(prefix + d));
+  stream?.on("data", (d) => process.stdout.write(prefix + d));
+}
+
+function run(label, cmd, args, cwd) {
+  const child = spawn(cmd, args, { cwd, shell: false, windowsHide: true });
+  children.add(child);
+  prefixLines(label, child.stdout);
+  prefixLines(label, child.stderr);
   child.on("exit", (code, signal) => {
     children.delete(child);
+    if (stopping) return;
     const why = signal ? `signal ${signal}` : `code ${code}`;
     console.log(`\n[${label}] exited with ${why}`);
-    shutdown(code ?? 0);
+    shutdown(code ?? 1);
   });
   child.on("error", (err) => {
     console.error(`[${label}] failed to start: ${err.message}`);
@@ -64,23 +72,29 @@ console.log("Press Ctrl+C to stop both.\n");
 buildIfNeeded()
   .then(() => {
     run("backend", python, ["-m", "uvicorn", "app.main:app", "--port", "8000"], backendDir);
-    run("frontend", isWin ? "npm.cmd" : "npm", ["run", "dev"], frontendDir);
+    run("frontend", process.execPath, [vite], frontendDir);
   })
   .catch((err) => {
     console.error(`[build] failed: ${err.message}`);
     process.exit(1);
   });
 
+async function runStep(label, cmd, args, cwd) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { cwd, shell: false, windowsHide: true });
+    prefixLines("build", child.stdout);
+    prefixLines("build", child.stderr);
+    child.on("error", reject);
+    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`${label} exited ${code}`))));
+  });
+}
+
 async function buildIfNeeded() {
   if (existsSync(path.join(frontendDir, "dist", "index.html"))) return;
-  console.log("[build] Frontend not built yet - building once (~5s)...");
-  await new Promise((resolve, reject) => {
-    const child = spawn(isWin ? "npm.cmd" : "npm", ["run", "build"], {
-      cwd: frontendDir,
-      shell: isWin,
-    });
-    child.stdout?.on("data", (d) => process.stdout.write("[build] " + d));
-    child.stderr?.on("data", (d) => process.stderr.write("[build] " + d));
-    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`npm run build exited ${code}`))));
-  });
+  if (!existsSync(vite) || !existsSync(tsc)) {
+    throw new Error("frontend dependencies are missing - run `npm install` in frontend/");
+  }
+  console.log("[build] Frontend not built yet - building once...");
+  await runStep("tsc", process.execPath, [tsc, "--noEmit"], frontendDir);
+  await runStep("vite build", process.execPath, [vite, "build"], frontendDir);
 }

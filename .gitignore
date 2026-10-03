@@ -22,6 +22,7 @@ uploads/
 
 # Build output
 frontend/dist/
+*.apk
 
 # Biometric model weights. 38 MB of third-party ONNX binaries, fetched by
 # backend/scripts/fetch_biometric_models.py, which verifies a pinned SHA-256 and

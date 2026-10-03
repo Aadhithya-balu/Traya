@@ -10,8 +10,8 @@ How the frontend holds state, talks to the API, and describes what comes back.
 | [`context/EmergencyContext.tsx`](#emergencycontext) | `EmergencyProvider`, `useEmergency` |
 | [`hooks/useCamera.ts`](#usecamera) | `useCamera`, `blobToBase64`, `fileToBase64` |
 | [`hooks/useGeolocation.ts`](#usegeolocation) | `useGeolocation` |
-| [`api/client.ts`](#api-client) | `api`, `ApiError`, `getTokens`, `setTokens`, `clearTokens` |
-| [`api/types.ts`](#api-types) | 31 interfaces |
+| [`api/client.ts`](#api-client) | `api`, `ApiError`, `getTokens`, `setTokens`, `clearTokens`, `getApiBase`, `setApiBase`, `clearApiBase`, `getDefaultApiBase`, `normalizeApiBase`, `checkConnection` |
+| [`api/types.ts`](#api-types) | 36 interfaces |
 
 ---
 
@@ -233,6 +233,26 @@ so they do not. Conflating them is how "the emergency flow logs me out" starts:
 one, so a response with an explicitly null refresh token leaves a stale value
 behind.
 
+### The backend base is a runtime setting
+
+`getApiBase()` resolves the API origin **on every request**, in this order:
+
+1. `localStorage["traya_api_base"]`, set from the `Connect` screen,
+2. the build-time `VITE_API_BASE` (held as `BUILD_API_BASE`),
+3. empty, meaning same-origin `/api` (the dev proxy and the FastAPI-served build).
+
+`setApiBase` / `clearApiBase` / `normalizeApiBase` / `getDefaultApiBase` manage
+the override. `checkConnection(base)` probes `GET /api/health` on an arbitrary
+origin and returns a `HealthReport` **without saving anything**, so the Connect
+screen stores an address only after a server has answered; a typo cannot strand
+the app on a dead host. It bypasses `request()` on purpose, because a probe must
+run before any base exists and must not enter the token-refresh path.
+
+This is what makes a packaged APK usable: it cannot run the Python backend and
+has no same-origin API, so the address is chosen on the device rather than
+compiled in. The device stores a URL and nothing else - no server credential is
+ever shipped in the app.
+
 ### `request<T>()`
 
 1. Prefixes `/api`.
@@ -405,7 +425,7 @@ exactly what is written in the source.
 
 ## api/types
 
-`api/types.ts`. 31 interfaces mirroring the Pydantic schemas.
+`api/types.ts`. 36 interfaces mirroring the Pydantic schemas.
 
 | Interface | Purpose |
 |---|---|
@@ -443,6 +463,7 @@ exactly what is written in the source.
 | `AuditLog` | One audit row. |
 | `Setting` | Key, value, description. |
 | `HospitalAdmin` | Full hospital record for the admin console. |
+| `HealthReport` | Response of `GET /api/health`, returned by `checkConnection`. `database.backend`, `database.tables` and `recognition.{model,simulation}` are what the Connect screen shows to confirm the server. |
 | `IncidentEvent` | One incident log entry: `sequence`, `event_type`, `actor_id`, `subject_id`, `fallback_used`, `details`, `at`. Carries **no clinical detail**, which is what makes it safe for every responder role to read. |
 | `IncidentTimeline` | `{ session_id, status, events }`. Ordered by `sequence`, not `at`. |
 | `FallbackResult` | What a fallback resolved to: `method`, `identified`, `resolved`, optional `subject_name`, `awaiting_second_party`, `reason`. `identified: false` with `resolved: true` is the unidentified path working, not an error. |

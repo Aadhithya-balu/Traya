@@ -77,6 +77,87 @@ changes need `npm run build`, and **documentation or configuration changes need
 `npm run docs:check`**. `npm run build` runs `tsc --noEmit` first, so a
 successful build is a successful typecheck.
 
+## Android build (debug APK)
+
+The frontend doubles as a Capacitor app. `frontend/capacitor.config.ts` sets the
+app id (`com.traya.app`), the name, and `webDir: "dist"`; the native project is
+`frontend/android/`.
+
+```powershell
+cd frontend
+npm run build
+npx cap sync android
+cd android
+$env:JAVA_HOME="C:\Program Files\Java\jdk-24"
+.\gradlew.bat assembleDebug
+```
+
+Output: `frontend/android/app/build/outputs/apk/debug/app-debug.apk`.
+
+Traps, each of which cost a build:
+
+- **Capacitor 8 compiles with `--release 21`.** The backend JDK
+  (`C:\Program Files\Java\jdk-17.0.18`) fails with `invalid source release: 21`.
+  Point `JAVA_HOME` at `jdk-24` for this one command.
+- `frontend/android/local.properties` (git-ignored) must contain `sdk.dir=...`.
+  Gradle does not fall back to `ANDROID_HOME`, and none is set on this machine.
+- **A native build needs an absolute API origin.** The web app uses a relative
+  `/api`, which the Vite proxy and FastAPI's SPA catch-all serve. A WebView loads
+  from `https://localhost`, where `/api` reaches nothing. Two ways to fix it:
+  bake it with `$env:VITE_API_BASE="http://<lan-ip>:8000"` before `npm run build`
+  (see `frontend/.env.example`), **or** ship it without one and let the user set
+  the server on the `Connect` screen, which saves the URL in `localStorage` with
+  no rebuild. Either way start the backend with `--host 0.0.0.0` (Docker already
+  binds `0.0.0.0`) so the phone can reach it. The APK never carries a server
+  secret, only a URL.
+- The camera and location need `CAMERA` / `ACCESS_FINE_LOCATION` /
+  `ACCESS_COARSE_LOCATION`; all three are in the main manifest. Capacitor's
+  `BridgeWebChromeClient.onPermissionRequest` raises the runtime prompt itself, so
+  the `getUserMedia` call in `useCamera` works once the model has them.
+- **Cleartext is debug-only.** `app/src/debug/AndroidManifest.xml` sets
+  `android:usesCleartextTraffic="true"`, so a debug APK can reach an `http://`
+  backend on the LAN without weakening a release build.
+
+## Docker
+
+The repository root carries a multi-stage `Dockerfile` and a
+`docker-compose.yml`. One container builds the web app with Node, installs the
+backend, fetches the biometric models, and serves everything on port 8000, so
+the whole product runs with one command on any machine with Docker.
+
+```powershell
+docker compose up --build
+```
+
+Open `http://localhost:8000`; the health view at `/api/health` reports which
+database answered. The compose file reads `backend/.env` through `env_file` - so
+**the Supabase credentials stay in that file and are never copied into the
+image** (`.dockerignore` excludes `backend/.env`, and the image carries only
+`.env.example`). A machine without a `.env` still boots on SQLite.
+
+| Detail | Value |
+|---|---|
+| Image | `traya-api:local` |
+| Base | `python:3.14-slim`, Debian trixie, run as non-root `traya` |
+| Models | fetched at build into `/models`, SHA-256 verified; skip with `--build-arg FETCH_MODELS=false` |
+| Frontend | built in a `node:22-alpine` stage, copied to `/app/frontend/dist`, served by FastAPI's SPA catch-all |
+| Health | container healthcheck polls `/api/health` |
+
+**The web build uses a relative `/api` on purpose**, because FastAPI serves the
+frontend on the same origin. That is what makes `docker compose up` portable; it
+is the native APK that needs an absolute `VITE_API_BASE`.
+
+A local PostgreSQL with pgvector is available under an opt-in profile. It is not
+used by default, because the primary is Supabase:
+
+```powershell
+docker compose --profile local-db up -d db
+```
+
+Then point `DATABASE_URL` in `backend/.env` at
+`postgresql+psycopg://postgres:traya_local_dev@localhost:54329/traya` and bring
+the app up again. Migrations are the production path for a fresh database.
+
 ## Environment
 
 `backend/.env`, copied from `backend/.env.example`. Pydantic reads it with

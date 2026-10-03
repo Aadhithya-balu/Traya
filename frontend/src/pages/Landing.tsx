@@ -95,6 +95,12 @@ export function Landing() {
         >
           {t("auth.register.title")}
         </Link>
+        <Link
+          to="/connect"
+          className="mt-6 block text-center text-xs text-faint underline underline-offset-4"
+        >
+          {t("landing.connect")}
+        </Link>
       </section>
     </div>
   );

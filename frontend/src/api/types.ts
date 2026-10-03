@@ -513,3 +513,31 @@ export interface HospitalAdmin {
   availability_verified: boolean;
   created_at?: string | null;
 }
+
+/**
+ * Response of `GET /api/health`.
+ *
+ * The connect screen shows `database.backend` and `recognition.model` so a
+ * person can confirm they reached the right server before saving its address.
+ * `database.backend` is `"supabase"`, `"postgresql"` or `"sqlite"`;
+ * `recognition.simulation` stays in the type because a real engine and a
+ * brightness comparator must never look alike in the UI.
+ */
+export interface HealthReport {
+  status: string;
+  app: string;
+  mode: string;
+  state: string;
+  database: {
+    backend: string;
+    dialect: string;
+    url: string;
+    primary_configured: boolean;
+    degraded: boolean;
+    reason?: string | null;
+    detail?: string | null;
+    tables: number;
+    checks: { connect: boolean; schema: boolean };
+  };
+  recognition: { engine: string; model: string; simulation: boolean };
+}
